@@ -1,26 +1,28 @@
 export const colors = {
-  primary: "#1f6e74",
-  primarySoft: "#ddf2f3",
-  accent: "#f29f67",
-  ink: "#0f1b24",
-  hero: "#163a45",
-  heroSecondary: "#214452",
-  heroBadge: "rgba(255,255,255,0.12)",
-  heroBorder: "rgba(255,255,255,0.18)",
-  canvas: "#f3f5f8",
-  card: "#ffffff",
-  cardMuted: "#f7fafc",
-  border: "#d7dfe8",
-  textHeading: "#1d2b36",
-  textBody: "#445263",
-  textSecondary: "#6b7b8f",
-  muted: "#98a6b6",
-  railText: "rgba(242, 246, 249, 0.78)",
+  primary: "#0c8b83",
+  primarySoft: "#dff6f1",
+  accent: "#da7b45",
+  ink: "#09181d",
+  hero: "#112831",
+  heroSecondary: "#1c3b46",
+  heroBadge: "rgba(255,251,243,0.12)",
+  heroBorder: "rgba(255,251,243,0.18)",
+  canvas: "#efe8dc",
+  card: "#fffdf8",
+  cardMuted: "#f5efe5",
+  border: "#d5c8b7",
+  textHeading: "#173039",
+  textBody: "#435a61",
+  textSecondary: "#6f7f83",
+  muted: "#9cabac",
+  railText: "rgba(247, 244, 238, 0.78)",
   white: "#ffffff",
-  error: "#c35b5b",
-  errorSoft: "#f9e9e9",
-  success: "#2e8a65",
-  successSoft: "#e5f5ed"
+  error: "#bb5a4b",
+  errorSoft: "#f7e5e1",
+  success: "#2b8766",
+  successSoft: "#e3f3ea",
+  gold: "#c69b57",
+  goldSoft: "#f4ead6"
 } as const;
 
 export const spacing = {
@@ -28,23 +30,25 @@ export const spacing = {
   sm: 12,
   md: 16,
   lg: 24,
-  xl: 32
+  xl: 32,
+  xxl: 40
 } as const;
 
 export const radius = {
   md: 14,
-  lg: 24
+  lg: 24,
+  xl: 32
 } as const;
 
 export const shadow = {
   card: {
     shadowColor: "#0f172a",
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
+    shadowOpacity: 0.09,
+    shadowRadius: 22,
     shadowOffset: {
       width: 0,
-      height: 10
+      height: 12
     },
-    elevation: 4
+    elevation: 5
   }
 } as const;
