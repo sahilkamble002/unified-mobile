@@ -44,6 +44,9 @@ export const createTask = (eventId: string, payload: CreateTaskPayload) =>
     body: payload
   });
 
+export const getTaskDetails = (taskId: string) =>
+  apiRequest<EventTask>(`/tasks/${taskId}`);
+
 export const assignTask = (taskId: string, payload: AssignTaskPayload) =>
   apiRequest<void>(`/tasks/${taskId}/assign`, {
     method: "POST",

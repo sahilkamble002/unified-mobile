@@ -35,11 +35,13 @@ import {
   type Expense,
   type FinanceSummary
 } from "@/src/api/finance";
+import { createEventNotification } from "@/src/api/notifications";
 import {
   assignTask,
   createTask,
   deleteTask,
   getEventTasks,
+  getTaskDetails,
   updateTaskProgress,
   updateTaskStatus,
   type EventTask
@@ -58,9 +60,11 @@ const ROLES = [
 ] as const;
 const TASK_STATUSES = ["PENDING", "IN_PROGRESS", "COMPLETED"] as const;
 const PAYMENT_METHODS = ["CASH", "UPI", "BANK_TRANSFER", "CARD"] as const;
+const NOTIFICATION_TYPES = ["GENERAL", "TASK", "FINANCE", "ALERT"] as const;
 const TASK_PREVIEW_LIMIT = 3;
 const DONATION_PAGE_SIZE = 5;
 const EXPENSE_PAGE_SIZE = 5;
+const TASK_VIEW_ALL_ROLES = ["SUPER_ADMIN", "ADMIN", "FINANCE"];
 const TASK_MANAGER_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
 const FINANCE_ROLES = ["SUPER_ADMIN", "ADMIN", "FINANCE"];
 const EVENT_ADMIN_ROLES = ["SUPER_ADMIN", "ADMIN"];
@@ -235,6 +239,9 @@ export default function EventDetailScreen() {
   const [taskProgressInputs, setTaskProgressInputs] = useState<
     Record<string, string>
   >({});
+  const [loadingTaskDetails, setLoadingTaskDetails] = useState<
+    Record<string, boolean>
+  >({});
   const [activeAssignTaskId, setActiveAssignTaskId] = useState("");
   const [assigningTaskId, setAssigningTaskId] = useState("");
   const [updatingTaskId, setUpdatingTaskId] = useState("");
@@ -251,8 +258,16 @@ export default function EventDetailScreen() {
     title: "",
     amount: ""
   });
+  const [notificationForm, setNotificationForm] = useState({
+    title: "",
+    message: "",
+    type: "GENERAL"
+  });
   const [creatingDonation, setCreatingDonation] = useState(false);
   const [creatingExpense, setCreatingExpense] = useState(false);
+  const [notificationLoading, setNotificationLoading] = useState(false);
+  const [notificationError, setNotificationError] = useState("");
+  const [notificationSuccess, setNotificationSuccess] = useState("");
   const [loadingQr, setLoadingQr] = useState(false);
   const [donationQr, setDonationQr] = useState("");
   const [verifyingDonationId, setVerifyingDonationId] = useState("");
@@ -281,9 +296,11 @@ export default function EventDetailScreen() {
   const isCreator = event?.createdBy?.id === user?.id;
   const canManageTasks = TASK_MANAGER_ROLES.includes(currentMemberRole);
   const canManageFinance = FINANCE_ROLES.includes(currentMemberRole);
+  const canManageNotifications = FINANCE_ROLES.includes(currentMemberRole);
   const canManageMembers = EVENT_ADMIN_ROLES.includes(currentMemberRole);
   const canEditEvent = EVENT_ADMIN_ROLES.includes(currentMemberRole);
   const canDeleteEvent = Boolean(isCreator || currentMemberRole === "SUPER_ADMIN");
+  const taskListIsAssignedOnly = !TASK_VIEW_ALL_ROLES.includes(currentMemberRole);
 
   const taskStats = useMemo(() => {
     const summary = { PENDING: 0, IN_PROGRESS: 0, COMPLETED: 0 };
@@ -473,7 +490,69 @@ export default function EventDetailScreen() {
     setShowAllMembers(false);
     setActiveAssignTaskId("");
     setTaskProgressInputs({});
+    setLoadingTaskDetails({});
+    setNotificationError("");
+    setNotificationSuccess("");
   }, [eventId]);
+
+  useEffect(() => {
+    const tasksMissingAssignments = tasks.filter(
+      (task) => !Object.prototype.hasOwnProperty.call(task, "assignments")
+    );
+
+    if (!tasksMissingAssignments.length) {
+      return;
+    }
+
+    let isActive = true;
+    const taskIds = tasksMissingAssignments.map((task) => task.id);
+
+    setLoadingTaskDetails((prev) => {
+      const next = { ...prev };
+
+      taskIds.forEach((taskId) => {
+        next[taskId] = true;
+      });
+
+      return next;
+    });
+
+    void Promise.allSettled(taskIds.map((taskId) => getTaskDetails(taskId))).then(
+      (results) => {
+        if (!isActive) {
+          return;
+        }
+
+        const detailsById = new Map<string, EventTask>();
+
+        results.forEach((result) => {
+          if (result.status === "fulfilled" && result.value?.id) {
+            detailsById.set(result.value.id, result.value);
+          }
+        });
+
+        if (detailsById.size) {
+          setTasks((prev) =>
+            prev.map((task) => detailsById.get(task.id) || task)
+          );
+        }
+
+        setLoadingTaskDetails((prev) => {
+          const next = { ...prev };
+
+          taskIds.forEach((taskId) => {
+            delete next[taskId];
+          });
+
+          return next;
+        });
+      }
+    );
+
+    return () => {
+      isActive = false;
+    };
+  }, [tasks]);
 
   useEffect(() => {
     const query = memberForm.username.trim();
@@ -744,7 +823,7 @@ export default function EventDetailScreen() {
           assignment.user?.username === user?.username
       ) || null;
 
-    if (!currentAssignment) {
+    if (!currentAssignment && !taskListIsAssignedOnly) {
       setError("You need to be assigned to this task before updating progress.");
       return;
     }
@@ -822,6 +901,42 @@ export default function EventDetailScreen() {
         }
       }
     ]);
+  };
+
+  const handleSendNotification = async () => {
+    if (!eventId) {
+      return;
+    }
+
+    if (!notificationForm.title.trim() || !notificationForm.message.trim()) {
+      setNotificationError("Title and message are required.");
+      setNotificationSuccess("");
+      return;
+    }
+
+    setNotificationLoading(true);
+    setNotificationError("");
+    setNotificationSuccess("");
+
+    try {
+      await createEventNotification(eventId, {
+        title: notificationForm.title.trim(),
+        message: notificationForm.message.trim(),
+        type: notificationForm.type
+      });
+      setNotificationForm((prev) => ({
+        ...prev,
+        title: "",
+        message: ""
+      }));
+      setNotificationSuccess("Notification sent to event members.");
+    } catch (err) {
+      setNotificationError(
+        err instanceof Error ? err.message : "Failed to send notification."
+      );
+    } finally {
+      setNotificationLoading(false);
+    }
   };
 
   const handleCreateDonation = async () => {
@@ -1154,250 +1269,353 @@ export default function EventDetailScreen() {
 
         {activeSection === "overview" ? (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Overview</Text>
-            <Text style={styles.sectionSubtitle}>
-              High-level health of this event across members, work, and money.
-            </Text>
-
-            <View style={styles.previewCard}>
-              <Text style={styles.subSectionTitle}>Members at a glance</Text>
-              {previewMembers.length ? (
-                previewMembers.map((member) => (
-                  <View key={member.id} style={styles.previewRow}>
-                    <Text style={styles.previewTitle}>
-                      {member.user?.name || member.user?.username || "Member"}
-                    </Text>
-                    <Text style={styles.previewMeta}>{member.role}</Text>
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.mutedText}>No members found.</Text>
-              )}
+            <View style={styles.sectionCardIntro}>
+              <Text style={styles.sectionTitle}>Overview</Text>
+              <Text style={styles.sectionSubtitle}>
+                High-level health of this event across members, work, and money.
+              </Text>
             </View>
 
-            <View style={styles.previewCard}>
-              <Text style={styles.subSectionTitle}>Task snapshot</Text>
-              <View style={styles.taskStatRow}>
-                <View style={styles.taskStat}>
-                  <Text style={styles.taskStatLabel}>Pending</Text>
-                  <Text style={styles.taskStatValue}>{taskStats.PENDING}</Text>
-                </View>
-                <View style={styles.taskStat}>
-                  <Text style={styles.taskStatLabel}>Active</Text>
-                  <Text style={styles.taskStatValue}>
-                    {taskStats.IN_PROGRESS}
-                  </Text>
-                </View>
-                <View style={styles.taskStat}>
-                  <Text style={styles.taskStatLabel}>Done</Text>
-                  <Text style={styles.taskStatValue}>{taskStats.COMPLETED}</Text>
-                </View>
+            <View style={styles.sectionCardBody}>
+              <View style={styles.previewCard}>
+                <Text style={styles.subSectionTitle}>Members at a glance</Text>
+                {previewMembers.length ? (
+                  previewMembers.map((member) => (
+                    <View key={member.id} style={styles.previewRow}>
+                      <Text style={styles.previewTitle}>
+                        {member.user?.name || member.user?.username || "Member"}
+                      </Text>
+                      <Text style={styles.previewMeta}>{member.role}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.mutedText}>No members found.</Text>
+                )}
               </View>
-              {previewTasks.length ? (
-                previewTasks.map((task) => (
-                  <View key={task.id} style={styles.previewRow}>
-                    <Text style={styles.previewTitle}>{task.title}</Text>
-                    <Text style={styles.previewMeta}>{task.status}</Text>
+
+              <View style={styles.previewCard}>
+                <Text style={styles.subSectionTitle}>Task snapshot</Text>
+                <View style={styles.taskStatRow}>
+                  <View style={styles.taskStat}>
+                    <Text style={styles.taskStatLabel}>Pending</Text>
+                    <Text style={styles.taskStatValue}>{taskStats.PENDING}</Text>
                   </View>
-                ))
-              ) : (
-                <Text style={styles.mutedText}>No tasks yet.</Text>
-              )}
+                  <View style={styles.taskStat}>
+                    <Text style={styles.taskStatLabel}>Active</Text>
+                    <Text style={styles.taskStatValue}>
+                      {taskStats.IN_PROGRESS}
+                    </Text>
+                  </View>
+                  <View style={styles.taskStat}>
+                    <Text style={styles.taskStatLabel}>Done</Text>
+                    <Text style={styles.taskStatValue}>
+                      {taskStats.COMPLETED}
+                    </Text>
+                  </View>
+                </View>
+                {previewTasks.length ? (
+                  previewTasks.map((task) => (
+                    <View key={task.id} style={styles.previewRow}>
+                      <Text style={styles.previewTitle}>{task.title}</Text>
+                      <Text style={styles.previewMeta}>{task.status}</Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.mutedText}>No tasks yet.</Text>
+                )}
+              </View>
+
+              <View style={styles.previewCard}>
+                <Text style={styles.subSectionTitle}>Finance snapshot</Text>
+                <View style={styles.moneyRow}>
+                  <View style={styles.moneyTile}>
+                    <Text style={styles.moneyLabel}>Raised</Text>
+                    <Text style={styles.moneyValue}>
+                      {formatAmount(raisedAmount)}
+                    </Text>
+                  </View>
+                  <View style={styles.moneyTile}>
+                    <Text style={styles.moneyLabel}>Expenses</Text>
+                    <Text style={styles.moneyValue}>
+                      {formatAmount(financeSummary?.totalExpenses ?? 0)}
+                    </Text>
+                  </View>
+                  <View style={styles.moneyTile}>
+                    <Text style={styles.moneyLabel}>Balance</Text>
+                    <Text style={styles.moneyValue}>
+                      {formatAmount(financeSummary?.balance ?? 0)}
+                    </Text>
+                  </View>
+                </View>
+                {previewDonations.length ? (
+                  previewDonations.map((donation) => (
+                    <View key={donation.id} style={styles.previewRow}>
+                      <Text style={styles.previewTitle}>
+                        {donation.donorName || "Anonymous donor"}
+                      </Text>
+                      <Text style={styles.previewMeta}>
+                        {formatAmount(donation.amount)}
+                      </Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text style={styles.mutedText}>No donations yet.</Text>
+                )}
+              </View>
+            </View>
+          </View>
+        ) : null}
+
+        {activeSection === "overview" ? (
+          <View style={styles.card}>
+            <View style={styles.sectionCardIntro}>
+              <Text style={styles.sectionTitle}>Notify members</Text>
+              <Text style={styles.sectionSubtitle}>
+                Send an event update from the overview workspace.
+              </Text>
             </View>
 
-            <View style={styles.previewCard}>
-              <Text style={styles.subSectionTitle}>Finance snapshot</Text>
-              <View style={styles.moneyRow}>
-                <View style={styles.moneyTile}>
-                  <Text style={styles.moneyLabel}>Raised</Text>
-                  <Text style={styles.moneyValue}>{formatAmount(raisedAmount)}</Text>
+            {canManageNotifications ? (
+              <View style={styles.sectionCardBody}>
+                <View style={styles.field}>
+                  <Text style={styles.label}>Title</Text>
+                  <TextInput
+                    value={notificationForm.title}
+                    onChangeText={(value) =>
+                      setNotificationForm((prev) => ({ ...prev, title: value }))
+                    }
+                    placeholder="Update or reminder"
+                    placeholderTextColor={colors.muted}
+                    style={styles.input}
+                  />
                 </View>
-                <View style={styles.moneyTile}>
-                  <Text style={styles.moneyLabel}>Expenses</Text>
-                  <Text style={styles.moneyValue}>
-                    {formatAmount(financeSummary?.totalExpenses ?? 0)}
+
+                <View style={styles.field}>
+                  <Text style={styles.label}>Message</Text>
+                  <TextInput
+                    multiline
+                    value={notificationForm.message}
+                    onChangeText={(value) =>
+                      setNotificationForm((prev) => ({
+                        ...prev,
+                        message: value
+                      }))
+                    }
+                    placeholder="Write a short message for members."
+                    placeholderTextColor={colors.muted}
+                    style={[styles.input, styles.textArea]}
+                    textAlignVertical="top"
+                  />
+                </View>
+
+                <ChoiceChips
+                  options={NOTIFICATION_TYPES}
+                  value={notificationForm.type}
+                  onChange={(nextType) =>
+                    setNotificationForm((prev) => ({ ...prev, type: nextType }))
+                  }
+                  disabled={notificationLoading}
+                />
+
+                <Pressable
+                  onPress={handleSendNotification}
+                  disabled={notificationLoading}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && styles.primaryButtonPressed,
+                    notificationLoading && styles.buttonDisabled
+                  ]}
+                >
+                  {notificationLoading ? (
+                    <ActivityIndicator color={colors.white} />
+                  ) : (
+                    <Text style={styles.primaryButtonText}>Send notification</Text>
+                  )}
+                </Pressable>
+
+                {notificationError ? (
+                  <Text style={styles.error}>{notificationError}</Text>
+                ) : null}
+                {notificationSuccess ? (
+                  <Text style={styles.successMessage}>
+                    {notificationSuccess}
                   </Text>
-                </View>
-                <View style={styles.moneyTile}>
-                  <Text style={styles.moneyLabel}>Balance</Text>
-                  <Text style={styles.moneyValue}>
-                    {formatAmount(financeSummary?.balance ?? 0)}
-                  </Text>
-                </View>
+                ) : null}
               </View>
-              {previewDonations.length ? (
-                previewDonations.map((donation) => (
-                  <View key={donation.id} style={styles.previewRow}>
-                    <Text style={styles.previewTitle}>
-                      {donation.donorName || "Anonymous donor"}
-                    </Text>
-                    <Text style={styles.previewMeta}>
-                      {formatAmount(donation.amount)}
-                    </Text>
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.mutedText}>No donations yet.</Text>
-              )}
-            </View>
+            ) : (
+              <View style={styles.sectionCardBody}>
+                <Text style={styles.mutedText}>
+                  Only SUPER_ADMIN, ADMIN, and FINANCE can send notifications.
+                </Text>
+              </View>
+            )}
           </View>
         ) : null}
 
         {activeSection === "overview" && (canEditEvent || canDeleteEvent) ? (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Event settings</Text>
-            <Text style={styles.sectionSubtitle}>
-              Update the event, configure UPI, or delete the event you created.
-            </Text>
-
-            <View style={styles.field}>
-              <Text style={styles.label}>Event name</Text>
-              <TextInput
-                value={eventForm.name}
-                onChangeText={(value) =>
-                  setEventForm((prev) => ({ ...prev, name: value }))
-                }
-                placeholder="Event name"
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-              />
+            <View style={styles.sectionCardIntro}>
+              <Text style={styles.sectionTitle}>Event settings</Text>
+              <Text style={styles.sectionSubtitle}>
+                Update the event, configure UPI, or delete the event you
+                created.
+              </Text>
             </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Description</Text>
-              <TextInput
-                multiline
-                value={eventForm.description}
-                onChangeText={(value) =>
-                  setEventForm((prev) => ({ ...prev, description: value }))
-                }
-                placeholder="Short description"
-                placeholderTextColor={colors.muted}
-                style={[styles.input, styles.textArea]}
-                textAlignVertical="top"
-              />
-            </View>
+            <View style={styles.sectionCardBody}>
+              <View style={styles.field}>
+                <Text style={styles.label}>Event name</Text>
+                <TextInput
+                  value={eventForm.name}
+                  onChangeText={(value) =>
+                    setEventForm((prev) => ({ ...prev, name: value }))
+                  }
+                  placeholder="Event name"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+              </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Donation UPI ID</Text>
-              <TextInput
-                value={eventForm.donationUpiId}
-                onChangeText={(value) =>
-                  setEventForm((prev) => ({ ...prev, donationUpiId: value }))
-                }
-                autoCapitalize="none"
-                placeholder="name@upi"
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-              />
-            </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>Description</Text>
+                <TextInput
+                  multiline
+                  value={eventForm.description}
+                  onChangeText={(value) =>
+                    setEventForm((prev) => ({ ...prev, description: value }))
+                  }
+                  placeholder="Short description"
+                  placeholderTextColor={colors.muted}
+                  style={[styles.input, styles.textArea]}
+                  textAlignVertical="top"
+                />
+              </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Funding goal</Text>
-              <TextInput
-                value={eventForm.fundingGoal}
-                onChangeText={(value) =>
-                  setEventForm((prev) => ({ ...prev, fundingGoal: value }))
-                }
-                keyboardType="numeric"
-                placeholder="50000"
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-              />
-            </View>
+              <View style={styles.field}>
+                <Text style={styles.label}>Donation UPI ID</Text>
+                <TextInput
+                  value={eventForm.donationUpiId}
+                  onChangeText={(value) =>
+                    setEventForm((prev) => ({ ...prev, donationUpiId: value }))
+                  }
+                  autoCapitalize="none"
+                  placeholder="name@upi"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+              </View>
 
-            <View style={styles.actionRow}>
-              {canEditEvent ? (
-                <Pressable
-                  onPress={handleSaveEvent}
-                  disabled={savingEvent}
-                  style={({ pressed }) => [
-                    styles.primaryButton,
-                    styles.actionButton,
-                    pressed && styles.primaryButtonPressed,
-                    savingEvent && styles.buttonDisabled
-                  ]}
-                >
-                  {savingEvent ? (
-                    <ActivityIndicator color={colors.white} />
-                  ) : (
-                    <Text style={styles.primaryButtonText}>Save event</Text>
-                  )}
-                </Pressable>
-              ) : null}
+              <View style={styles.field}>
+                <Text style={styles.label}>Funding goal</Text>
+                <TextInput
+                  value={eventForm.fundingGoal}
+                  onChangeText={(value) =>
+                    setEventForm((prev) => ({ ...prev, fundingGoal: value }))
+                  }
+                  keyboardType="numeric"
+                  placeholder="50000"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+              </View>
 
-              {canDeleteEvent ? (
-                <Pressable
-                  onPress={confirmDeleteEvent}
-                  disabled={deletingEvent}
-                  style={({ pressed }) => [
-                    styles.dangerButton,
-                    styles.actionButton,
-                    pressed && styles.buttonPressed,
-                    deletingEvent && styles.buttonDisabled
-                  ]}
-                >
-                  {deletingEvent ? (
-                    <ActivityIndicator color={colors.white} />
-                  ) : (
-                    <Text style={styles.dangerButtonText}>Delete event</Text>
-                  )}
-                </Pressable>
-              ) : null}
+              <View style={styles.actionRow}>
+                {canEditEvent ? (
+                  <Pressable
+                    onPress={handleSaveEvent}
+                    disabled={savingEvent}
+                    style={({ pressed }) => [
+                      styles.primaryButton,
+                      styles.actionButton,
+                      pressed && styles.primaryButtonPressed,
+                      savingEvent && styles.buttonDisabled
+                    ]}
+                  >
+                    {savingEvent ? (
+                      <ActivityIndicator color={colors.white} />
+                    ) : (
+                      <Text style={styles.primaryButtonText}>Save event</Text>
+                    )}
+                  </Pressable>
+                ) : null}
+
+                {canDeleteEvent ? (
+                  <Pressable
+                    onPress={confirmDeleteEvent}
+                    disabled={deletingEvent}
+                    style={({ pressed }) => [
+                      styles.dangerButton,
+                      styles.actionButton,
+                      pressed && styles.buttonPressed,
+                      deletingEvent && styles.buttonDisabled
+                    ]}
+                  >
+                    {deletingEvent ? (
+                      <ActivityIndicator color={colors.white} />
+                    ) : (
+                      <Text style={styles.dangerButtonText}>Delete event</Text>
+                    )}
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
           </View>
         ) : null}
 
         {activeSection === "tasks" && canManageTasks ? (
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Quick add task</Text>
-            <Text style={styles.sectionSubtitle}>
-              Managers can create tasks straight from the event workspace.
-            </Text>
-
-            <View style={styles.field}>
-              <Text style={styles.label}>Task title</Text>
-              <TextInput
-                value={taskForm.title}
-                onChangeText={(value) =>
-                  setTaskForm((prev) => ({ ...prev, title: value }))
-                }
-                placeholder="Set up stage volunteers"
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-              />
+            <View style={styles.sectionCardIntro}>
+              <Text style={styles.sectionTitle}>Quick add task</Text>
+              <Text style={styles.sectionSubtitle}>
+                Managers can create tasks straight from the event workspace.
+              </Text>
             </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Description</Text>
-              <TextInput
-                multiline
-                value={taskForm.description}
-                onChangeText={(value) =>
-                  setTaskForm((prev) => ({ ...prev, description: value }))
-                }
-                placeholder="Short description"
-                placeholderTextColor={colors.muted}
-                style={[styles.input, styles.textArea]}
-                textAlignVertical="top"
-              />
-            </View>
+            <View style={styles.sectionCardBody}>
+              <View style={styles.field}>
+                <Text style={styles.label}>Task title</Text>
+                <TextInput
+                  value={taskForm.title}
+                  onChangeText={(value) =>
+                    setTaskForm((prev) => ({ ...prev, title: value }))
+                  }
+                  placeholder="Set up stage volunteers"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                />
+              </View>
 
-            <Pressable
-              onPress={handleCreateTask}
-              disabled={creatingTask}
-              style={({ pressed }) => [
-                styles.primaryButton,
-                pressed && styles.primaryButtonPressed,
-                creatingTask && styles.buttonDisabled
-              ]}
-            >
-              {creatingTask ? (
-                <ActivityIndicator color={colors.white} />
-              ) : (
-                <Text style={styles.primaryButtonText}>Create task</Text>
-              )}
-            </Pressable>
+              <View style={styles.field}>
+                <Text style={styles.label}>Description</Text>
+                <TextInput
+                  multiline
+                  value={taskForm.description}
+                  onChangeText={(value) =>
+                    setTaskForm((prev) => ({ ...prev, description: value }))
+                  }
+                  placeholder="Short description"
+                  placeholderTextColor={colors.muted}
+                  style={[styles.input, styles.textArea]}
+                  textAlignVertical="top"
+                />
+              </View>
+
+              <Pressable
+                onPress={handleCreateTask}
+                disabled={creatingTask}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  pressed && styles.primaryButtonPressed,
+                  creatingTask && styles.buttonDisabled
+                ]}
+              >
+                {creatingTask ? (
+                  <ActivityIndicator color={colors.white} />
+                ) : (
+                  <Text style={styles.primaryButtonText}>Create task</Text>
+                )}
+              </Pressable>
+            </View>
           </View>
         ) : null}
 
@@ -1444,6 +1662,10 @@ export default function EventDetailScreen() {
             <View style={styles.list}>
               {visibleTasks.length ? (
                 visibleTasks.map((task) => {
+                  const hasAssignmentData = Object.prototype.hasOwnProperty.call(
+                    task,
+                    "assignments"
+                  );
                   const assignments = Array.isArray(task.assignments)
                     ? task.assignments
                     : [];
@@ -1453,8 +1675,10 @@ export default function EventDetailScreen() {
                         assignment.user?.id === user?.id ||
                         assignment.user?.username === user?.username
                     ) || null;
+                  const taskAssignedToCurrentUser =
+                    Boolean(currentAssignment) || taskListIsAssignedOnly;
                   const canUpdateThisTask =
-                    canManageTasks || Boolean(currentAssignment);
+                    canManageTasks || taskAssignedToCurrentUser;
                   const progressInputValue =
                     taskProgressInputs[task.id] ??
                     String(clampProgress(currentAssignment?.progress ?? 0));
@@ -1544,19 +1768,25 @@ export default function EventDetailScreen() {
                               );
                             })}
                           </View>
+                        ) : loadingTaskDetails[task.id] ||
+                          !hasAssignmentData ? (
+                          <Text style={styles.helperText}>
+                            Loading assignment details...
+                          </Text>
                         ) : (
                           <Text style={styles.helperText}>
-                            No one is assigned yet.
+                            {taskAssignedToCurrentUser
+                              ? "Assigned to you."
+                              : "No one is assigned yet."}
                           </Text>
                         )}
                       </View>
 
-                      {currentAssignment ? (
+                      {taskAssignedToCurrentUser ? (
                         <View style={styles.progressEditorCard}>
                           <Text style={styles.label}>My progress</Text>
                           <Text style={styles.helperText}>
-                            Update your progress from mobile just like the
-                            website task screen.
+                            Update your progress
                           </Text>
                           <View style={styles.progressInputRow}>
                             <TextInput
@@ -1721,37 +1951,43 @@ export default function EventDetailScreen() {
         {activeSection === "members" ? (
           <>
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Members</Text>
-              <Text style={styles.sectionSubtitle}>
-                Separate leadership, support, and permissions cleanly from one
-                mobile workspace.
-              </Text>
+              <View style={styles.sectionCardIntro}>
+                <Text style={styles.sectionTitle}>Members</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Separate leadership, support, and permissions cleanly from one
+                  mobile workspace.
+                </Text>
+              </View>
 
-              <View style={styles.moneyRow}>
-                <View style={styles.moneyTile}>
-                  <Text style={styles.moneyLabel}>Total</Text>
-                  <Text style={styles.moneyValue}>{members.length}</Text>
-                </View>
-                <View style={styles.moneyTile}>
-                  <Text style={styles.moneyLabel}>Leadership</Text>
-                  <Text style={styles.moneyValue}>{leadershipCount}</Text>
-                </View>
-                <View style={styles.moneyTile}>
-                  <Text style={styles.moneyLabel}>Support</Text>
-                  <Text style={styles.moneyValue}>{supportCount}</Text>
+              <View style={styles.sectionCardBody}>
+                <View style={styles.moneyRow}>
+                  <View style={styles.moneyTile}>
+                    <Text style={styles.moneyLabel}>Total</Text>
+                    <Text style={styles.moneyValue}>{members.length}</Text>
+                  </View>
+                  <View style={styles.moneyTile}>
+                    <Text style={styles.moneyLabel}>Leadership</Text>
+                    <Text style={styles.moneyValue}>{leadershipCount}</Text>
+                  </View>
+                  <View style={styles.moneyTile}>
+                    <Text style={styles.moneyLabel}>Support</Text>
+                    <Text style={styles.moneyValue}>{supportCount}</Text>
+                  </View>
                 </View>
               </View>
             </View>
 
             {canManageMembers ? (
               <View style={styles.card}>
-                <Text style={styles.sectionTitle}>Add member</Text>
-                <Text style={styles.sectionSubtitle}>
-                  Search by username, choose a role, and add the member directly
-                  to this event.
-                </Text>
+                <View style={styles.sectionCardIntro}>
+                  <Text style={styles.sectionTitle}>Add member</Text>
+                  <Text style={styles.sectionSubtitle}>
+                    Search by username, choose a role, and add the member
+                    directly to this event.
+                  </Text>
+                </View>
 
-                <View style={styles.manageBlock}>
+                <View style={styles.sectionCardBody}>
                   <View style={styles.field}>
                     <Text style={styles.label}>Search by username</Text>
                     <TextInput
@@ -1950,201 +2186,220 @@ export default function EventDetailScreen() {
                 ) : null}
               </View>
 
-              <View style={styles.financeStatsRow}>
-                <View style={styles.financeStat}>
-                  <Text style={styles.financeStatLabel}>Donations</Text>
-                  <Text style={styles.financeStatValue}>
-                    {formatAmount(financeSummary?.totalDonations ?? 0)}
-                  </Text>
+              <View style={styles.sectionCardBody}>
+                <View style={styles.financeStatsRow}>
+                  <View style={styles.financeStat}>
+                    <Text style={styles.financeStatLabel}>Donations</Text>
+                    <Text style={styles.financeStatValue}>
+                      {formatAmount(financeSummary?.totalDonations ?? 0)}
+                    </Text>
+                  </View>
+                  <View style={styles.financeStat}>
+                    <Text style={styles.financeStatLabel}>Expenses</Text>
+                    <Text style={styles.financeStatValue}>
+                      {formatAmount(financeSummary?.totalExpenses ?? 0)}
+                    </Text>
+                  </View>
+                  <View style={styles.financeStat}>
+                    <Text style={styles.financeStatLabel}>Balance</Text>
+                    <Text style={styles.financeStatValue}>
+                      {formatAmount(financeSummary?.balance ?? 0)}
+                    </Text>
+                  </View>
                 </View>
-                <View style={styles.financeStat}>
-                  <Text style={styles.financeStatLabel}>Expenses</Text>
-                  <Text style={styles.financeStatValue}>
-                    {formatAmount(financeSummary?.totalExpenses ?? 0)}
-                  </Text>
-                </View>
-                <View style={styles.financeStat}>
-                  <Text style={styles.financeStatLabel}>Balance</Text>
-                  <Text style={styles.financeStatValue}>
-                    {formatAmount(financeSummary?.balance ?? 0)}
-                  </Text>
-                </View>
-              </View>
 
-              {financeError ? (
-                <Text style={styles.warning}>{financeError}</Text>
-              ) : null}
+                {financeError ? (
+                  <Text style={styles.warning}>{financeError}</Text>
+                ) : null}
+              </View>
             </View>
 
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Donation collection</Text>
-              <Text style={styles.sectionSubtitle}>
-                Keep the event UPI ready for on-the-spot payments and generate a
-                QR whenever the team needs it.
-              </Text>
-
-              <View style={styles.upiCard}>
-                <Text style={styles.upiLabel}>Donation UPI</Text>
-                <Text style={styles.upiValue}>
-                  {event.donationUpiId || "Not configured yet"}
+              <View style={styles.sectionCardIntro}>
+                <Text style={styles.sectionTitle}>Donation collection</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Keep the event UPI ready for on-the-spot payments and
+                  generate a QR whenever the team needs it.
                 </Text>
+              </View>
 
-                <Pressable
-                  onPress={handleGenerateQr}
-                  disabled={loadingQr}
-                  style={({ pressed }) => [
-                    styles.secondaryButton,
-                    pressed && styles.buttonPressed,
-                    loadingQr && styles.buttonDisabled
-                  ]}
-                >
-                  {loadingQr ? (
-                    <ActivityIndicator color={colors.textHeading} />
-                  ) : (
-                    <Text style={styles.secondaryButtonText}>Generate QR</Text>
-                  )}
-                </Pressable>
-
-                {donationQr ? (
-                  <Image source={{ uri: donationQr }} style={styles.qrImage} />
-                ) : (
-                  <Text style={styles.helperText}>
-                    Generate a QR to collect UPI payments directly from the app.
+              <View style={styles.sectionCardBody}>
+                <View style={styles.upiCard}>
+                  <Text style={styles.upiLabel}>Donation UPI</Text>
+                  <Text style={styles.upiValue}>
+                    {event.donationUpiId || "Not configured yet"}
                   </Text>
-                )}
+
+                  <Pressable
+                    onPress={handleGenerateQr}
+                    disabled={loadingQr}
+                    style={({ pressed }) => [
+                      styles.secondaryButton,
+                      pressed && styles.buttonPressed,
+                      loadingQr && styles.buttonDisabled
+                    ]}
+                  >
+                    {loadingQr ? (
+                      <ActivityIndicator color={colors.textHeading} />
+                    ) : (
+                      <Text style={styles.secondaryButtonText}>Generate QR</Text>
+                    )}
+                  </Pressable>
+
+                  {donationQr ? (
+                    <Image source={{ uri: donationQr }} style={styles.qrImage} />
+                  ) : (
+                    <Text style={styles.helperText}>
+                      Generate a QR to collect UPI payments directly from the
+                      app.
+                    </Text>
+                  )}
+                </View>
               </View>
             </View>
 
             {canManageFinance ? (
               <View style={styles.card}>
-                <Text style={styles.sectionTitle}>Record activity</Text>
-                <Text style={styles.sectionSubtitle}>
-                  Add both donations and expenses without leaving the finance
-                  section.
-                </Text>
+                <View style={styles.sectionCardIntro}>
+                  <Text style={styles.sectionTitle}>Record activity</Text>
+                  <Text style={styles.sectionSubtitle}>
+                    Add both donations and expenses without leaving the finance
+                    section.
+                  </Text>
+                </View>
 
-                <View style={styles.financeForms}>
-                  <View style={styles.financeFormCard}>
-                    <Text style={styles.subSectionTitle}>Record donation</Text>
-                    <View style={styles.field}>
-                      <Text style={styles.label}>Donor name</Text>
-                      <TextInput
-                        value={donationForm.donorName}
-                        onChangeText={(value) =>
+                <View style={styles.sectionCardBody}>
+                  <View style={styles.financeForms}>
+                    <View style={styles.financeFormCard}>
+                      <Text style={styles.subSectionTitle}>Record donation</Text>
+                      <View style={styles.field}>
+                        <Text style={styles.label}>Donor name</Text>
+                        <TextInput
+                          value={donationForm.donorName}
+                          onChangeText={(value) =>
+                            setDonationForm((prev) => ({
+                              ...prev,
+                              donorName: value
+                            }))
+                          }
+                          placeholder="Donor name"
+                          placeholderTextColor={colors.muted}
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={styles.field}>
+                        <Text style={styles.label}>Amount</Text>
+                        <TextInput
+                          value={donationForm.amount}
+                          onChangeText={(value) =>
+                            setDonationForm((prev) => ({
+                              ...prev,
+                              amount: value
+                            }))
+                          }
+                          keyboardType="numeric"
+                          placeholder="1000"
+                          placeholderTextColor={colors.muted}
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={styles.field}>
+                        <Text style={styles.label}>Reference ID</Text>
+                        <TextInput
+                          value={donationForm.referenceId}
+                          onChangeText={(value) =>
+                            setDonationForm((prev) => ({
+                              ...prev,
+                              referenceId: value
+                            }))
+                          }
+                          autoCapitalize="none"
+                          placeholder="optional reference"
+                          placeholderTextColor={colors.muted}
+                          style={styles.input}
+                        />
+                      </View>
+
+                      <ChoiceChips
+                        options={PAYMENT_METHODS}
+                        value={donationForm.paymentMethod}
+                        onChange={(nextMethod) =>
                           setDonationForm((prev) => ({
                             ...prev,
-                            donorName: value
+                            paymentMethod: nextMethod
                           }))
                         }
-                        placeholder="Donor name"
-                        placeholderTextColor={colors.muted}
-                        style={styles.input}
+                        disabled={creatingDonation}
                       />
-                    </View>
-                    <View style={styles.field}>
-                      <Text style={styles.label}>Amount</Text>
-                      <TextInput
-                        value={donationForm.amount}
-                        onChangeText={(value) =>
-                          setDonationForm((prev) => ({ ...prev, amount: value }))
-                        }
-                        keyboardType="numeric"
-                        placeholder="1000"
-                        placeholderTextColor={colors.muted}
-                        style={styles.input}
-                      />
-                    </View>
-                    <View style={styles.field}>
-                      <Text style={styles.label}>Reference ID</Text>
-                      <TextInput
-                        value={donationForm.referenceId}
-                        onChangeText={(value) =>
-                          setDonationForm((prev) => ({
-                            ...prev,
-                            referenceId: value
-                          }))
-                        }
-                        autoCapitalize="none"
-                        placeholder="optional reference"
-                        placeholderTextColor={colors.muted}
-                        style={styles.input}
-                      />
+
+                      <Pressable
+                        onPress={handleCreateDonation}
+                        disabled={creatingDonation}
+                        style={({ pressed }) => [
+                          styles.primaryButton,
+                          pressed && styles.primaryButtonPressed,
+                          creatingDonation && styles.buttonDisabled
+                        ]}
+                      >
+                        {creatingDonation ? (
+                          <ActivityIndicator color={colors.white} />
+                        ) : (
+                          <Text style={styles.primaryButtonText}>
+                            Save donation
+                          </Text>
+                        )}
+                      </Pressable>
                     </View>
 
-                    <ChoiceChips
-                      options={PAYMENT_METHODS}
-                      value={donationForm.paymentMethod}
-                      onChange={(nextMethod) =>
-                        setDonationForm((prev) => ({
-                          ...prev,
-                          paymentMethod: nextMethod
-                        }))
-                      }
-                      disabled={creatingDonation}
-                    />
+                    <View style={styles.financeFormCard}>
+                      <Text style={styles.subSectionTitle}>Record expense</Text>
+                      <View style={styles.field}>
+                        <Text style={styles.label}>Title</Text>
+                        <TextInput
+                          value={expenseForm.title}
+                          onChangeText={(value) =>
+                            setExpenseForm((prev) => ({ ...prev, title: value }))
+                          }
+                          placeholder="Expense title"
+                          placeholderTextColor={colors.muted}
+                          style={styles.input}
+                        />
+                      </View>
+                      <View style={styles.field}>
+                        <Text style={styles.label}>Amount</Text>
+                        <TextInput
+                          value={expenseForm.amount}
+                          onChangeText={(value) =>
+                            setExpenseForm((prev) => ({
+                              ...prev,
+                              amount: value
+                            }))
+                          }
+                          keyboardType="numeric"
+                          placeholder="500"
+                          placeholderTextColor={colors.muted}
+                          style={styles.input}
+                        />
+                      </View>
 
-                    <Pressable
-                      onPress={handleCreateDonation}
-                      disabled={creatingDonation}
-                      style={({ pressed }) => [
-                        styles.primaryButton,
-                        pressed && styles.primaryButtonPressed,
-                        creatingDonation && styles.buttonDisabled
-                      ]}
-                    >
-                      {creatingDonation ? (
-                        <ActivityIndicator color={colors.white} />
-                      ) : (
-                        <Text style={styles.primaryButtonText}>
-                          Save donation
-                        </Text>
-                      )}
-                    </Pressable>
-                  </View>
-
-                  <View style={styles.financeFormCard}>
-                    <Text style={styles.subSectionTitle}>Record expense</Text>
-                    <View style={styles.field}>
-                      <Text style={styles.label}>Title</Text>
-                      <TextInput
-                        value={expenseForm.title}
-                        onChangeText={(value) =>
-                          setExpenseForm((prev) => ({ ...prev, title: value }))
-                        }
-                        placeholder="Expense title"
-                        placeholderTextColor={colors.muted}
-                        style={styles.input}
-                      />
+                      <Pressable
+                        onPress={handleCreateExpense}
+                        disabled={creatingExpense}
+                        style={({ pressed }) => [
+                          styles.primaryButton,
+                          pressed && styles.primaryButtonPressed,
+                          creatingExpense && styles.buttonDisabled
+                        ]}
+                      >
+                        {creatingExpense ? (
+                          <ActivityIndicator color={colors.white} />
+                        ) : (
+                          <Text style={styles.primaryButtonText}>
+                            Save expense
+                          </Text>
+                        )}
+                      </Pressable>
                     </View>
-                    <View style={styles.field}>
-                      <Text style={styles.label}>Amount</Text>
-                      <TextInput
-                        value={expenseForm.amount}
-                        onChangeText={(value) =>
-                          setExpenseForm((prev) => ({ ...prev, amount: value }))
-                        }
-                        keyboardType="numeric"
-                        placeholder="500"
-                        placeholderTextColor={colors.muted}
-                        style={styles.input}
-                      />
-                    </View>
-
-                    <Pressable
-                      onPress={handleCreateExpense}
-                      disabled={creatingExpense}
-                      style={({ pressed }) => [
-                        styles.primaryButton,
-                        pressed && styles.primaryButtonPressed,
-                        creatingExpense && styles.buttonDisabled
-                      ]}
-                    >
-                      {creatingExpense ? (
-                        <ActivityIndicator color={colors.white} />
-                      ) : (
-                        <Text style={styles.primaryButtonText}>Save expense</Text>
-                      )}
-                    </Pressable>
                   </View>
                 </View>
               </View>
@@ -2510,6 +2765,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20
   },
+  successMessage: {
+    backgroundColor: colors.primarySoft,
+    color: colors.success,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    lineHeight: 20
+  },
   statsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -2583,6 +2847,12 @@ const styles = StyleSheet.create({
   sectionHeaderCopy: {
     flex: 1,
     gap: 4
+  },
+  sectionCardIntro: {
+    gap: 4
+  },
+  sectionCardBody: {
+    gap: spacing.md
   },
   goalAmounts: {
     flexDirection: "row",
