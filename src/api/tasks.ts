@@ -6,6 +6,16 @@ export type EventTask = {
   description?: string | null;
   status: string;
   createdAt: string;
+  assignments?: {
+    id: string;
+    progress: number;
+    user?: {
+      id: string;
+      name: string;
+      username?: string | null;
+      email?: string | null;
+    } | null;
+  }[];
 };
 
 export type CreateTaskPayload = {
@@ -19,6 +29,10 @@ export type AssignTaskPayload = {
 
 export type UpdateTaskStatusPayload = {
   status: string;
+};
+
+export type UpdateTaskProgressPayload = {
+  progress: number;
 };
 
 export const getEventTasks = (eventId: string) =>
@@ -41,6 +55,15 @@ export const updateTaskStatus = (
   payload: UpdateTaskStatusPayload
 ) =>
   apiRequest<EventTask>(`/tasks/${taskId}/status`, {
+    method: "PATCH",
+    body: payload
+  });
+
+export const updateTaskProgress = (
+  taskId: string,
+  payload: UpdateTaskProgressPayload
+) =>
+  apiRequest<void>(`/tasks/${taskId}/progress`, {
     method: "PATCH",
     body: payload
   });

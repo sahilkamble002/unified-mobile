@@ -40,6 +40,7 @@ import {
   createTask,
   deleteTask,
   getEventTasks,
+  updateTaskProgress,
   updateTaskStatus,
   type EventTask
 } from "@/src/api/tasks";
@@ -57,10 +58,14 @@ const ROLES = [
 ] as const;
 const TASK_STATUSES = ["PENDING", "IN_PROGRESS", "COMPLETED"] as const;
 const PAYMENT_METHODS = ["CASH", "UPI", "BANK_TRANSFER", "CARD"] as const;
+const TASK_PREVIEW_LIMIT = 3;
+const DONATION_PAGE_SIZE = 5;
+const EXPENSE_PAGE_SIZE = 5;
 const TASK_MANAGER_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
 const FINANCE_ROLES = ["SUPER_ADMIN", "ADMIN", "FINANCE"];
 const EVENT_ADMIN_ROLES = ["SUPER_ADMIN", "ADMIN"];
 const LEADERSHIP_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
+const MEMBER_PREVIEW_ROLES = ["SUPER_ADMIN", "ADMIN", "FINANCE"];
 const SECTION_COPY: Record<
   WorkspaceSection,
   { title: string; description: string }
@@ -113,6 +118,8 @@ const formatLabel = (value: string) =>
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 
+const clampProgress = (value: number) => Math.max(0, Math.min(100, value));
+
 type ChoiceChipsProps = {
   options: readonly string[];
   value: string;
@@ -121,6 +128,17 @@ type ChoiceChipsProps = {
 };
 
 type WorkspaceSection = "overview" | "members" | "tasks" | "finance";
+type PaginationState = {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+type LoadScreenOptions = {
+  mode?: "initial" | "refresh";
+  donationPage?: number;
+  expensePage?: number;
+};
 
 function ChoiceChips({
   options,
@@ -178,6 +196,12 @@ export default function EventDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [financeError, setFinanceError] = useState("");
+  const [donationPage, setDonationPage] = useState(1);
+  const [expensePage, setExpensePage] = useState(1);
+  const [donationPagination, setDonationPagination] =
+    useState<PaginationState | null>(null);
+  const [expensePagination, setExpensePagination] =
+    useState<PaginationState | null>(null);
 
   const [eventForm, setEventForm] = useState({
     name: "",
@@ -187,6 +211,8 @@ export default function EventDetailScreen() {
   });
   const [activeSection, setActiveSection] =
     useState<WorkspaceSection>("overview");
+  const [showAllTasks, setShowAllTasks] = useState(false);
+  const [showAllMembers, setShowAllMembers] = useState(false);
   const [savingEvent, setSavingEvent] = useState(false);
   const [deletingEvent, setDeletingEvent] = useState(false);
 
@@ -206,8 +232,13 @@ export default function EventDetailScreen() {
   const [taskAssignees, setTaskAssignees] = useState<Record<string, string>>(
     {}
   );
+  const [taskProgressInputs, setTaskProgressInputs] = useState<
+    Record<string, string>
+  >({});
+  const [activeAssignTaskId, setActiveAssignTaskId] = useState("");
   const [assigningTaskId, setAssigningTaskId] = useState("");
   const [updatingTaskId, setUpdatingTaskId] = useState("");
+  const [updatingProgressTaskId, setUpdatingProgressTaskId] = useState("");
   const [deletingTaskId, setDeletingTaskId] = useState("");
 
   const [donationForm, setDonationForm] = useState({
@@ -278,6 +309,15 @@ export default function EventDetailScreen() {
   const previewMembers = members.slice(0, 3);
   const previewTasks = tasks.slice(0, 3);
   const previewDonations = donations.slice(0, 3);
+  const pinnedMembers = useMemo(
+    () =>
+      members.filter((member) => MEMBER_PREVIEW_ROLES.includes(member.role)),
+    [members]
+  );
+  const visibleTasks = showAllTasks ? tasks : tasks.slice(0, TASK_PREVIEW_LIMIT);
+  const visibleMembers = showAllMembers ? members : pinnedMembers;
+  const hasHiddenTasks = tasks.length > TASK_PREVIEW_LIMIT;
+  const hasHiddenMembers = members.length > pinnedMembers.length;
   const leadershipCount = useMemo(
     () => members.filter((member) => LEADERSHIP_ROLES.includes(member.role)).length,
     [members]
@@ -286,12 +326,18 @@ export default function EventDetailScreen() {
   const activeSectionCopy = SECTION_COPY[activeSection];
 
   const loadScreen = useCallback(
-    async (mode: "initial" | "refresh" = "initial") => {
+    async (options: LoadScreenOptions = {}) => {
       if (!eventId) {
         setError("Event id is missing.");
         setLoading(false);
         return;
       }
+
+      const {
+        mode = "initial",
+        donationPage: nextDonationPage = donationPage,
+        expensePage: nextExpensePage = expensePage
+      } = options;
 
       if (mode === "refresh") {
         setRefreshing(true);
@@ -313,8 +359,14 @@ export default function EventDetailScreen() {
           getEventById(eventId),
           getEventTasks(eventId),
           getFinanceSummary(eventId),
-          getEventDonations(eventId, { page: 1, limit: 5 }),
-          getEventExpenses(eventId, { page: 1, limit: 5 })
+          getEventDonations(eventId, {
+            page: nextDonationPage,
+            limit: DONATION_PAGE_SIZE
+          }),
+          getEventExpenses(eventId, {
+            page: nextExpensePage,
+            limit: EXPENSE_PAGE_SIZE
+          })
         ]);
 
         if (eventResult.status === "fulfilled") {
@@ -359,9 +411,11 @@ export default function EventDetailScreen() {
               ? donationsResult.value.donations
               : []
           );
+          setDonationPagination(donationsResult.value?.pagination ?? null);
         } else {
           financeMessages.push("donations");
           setDonations([]);
+          setDonationPagination(null);
         }
 
         if (expensesResult.status === "fulfilled") {
@@ -370,9 +424,11 @@ export default function EventDetailScreen() {
               ? expensesResult.value.expenses
               : []
           );
+          setExpensePagination(expensesResult.value?.pagination ?? null);
         } else {
           financeMessages.push("expenses");
           setExpenses([]);
+          setExpensePagination(null);
         }
 
         setFinanceError(
@@ -390,13 +446,15 @@ export default function EventDetailScreen() {
         setFinanceSummary(null);
         setDonations([]);
         setExpenses([]);
+        setDonationPagination(null);
+        setExpensePagination(null);
         setFinanceError("");
       } finally {
         setLoading(false);
         setRefreshing(false);
       }
     },
-    [eventId]
+    [donationPage, eventId, expensePage]
   );
 
   useEffect(() => {
@@ -409,6 +467,12 @@ export default function EventDetailScreen() {
 
   useEffect(() => {
     setDonationQr("");
+    setDonationPage(1);
+    setExpensePage(1);
+    setShowAllTasks(false);
+    setShowAllMembers(false);
+    setActiveAssignTaskId("");
+    setTaskProgressInputs({});
   }, [eventId]);
 
   useEffect(() => {
@@ -662,11 +726,54 @@ export default function EventDetailScreen() {
     try {
       await assignTask(taskId, { username });
       setTaskAssignees((prev) => ({ ...prev, [taskId]: "" }));
+      setActiveAssignTaskId("");
       await loadScreen();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to assign task.");
     } finally {
       setAssigningTaskId("");
+    }
+  };
+
+  const handleUpdateTaskProgress = async (task: EventTask) => {
+    const assignments = Array.isArray(task.assignments) ? task.assignments : [];
+    const currentAssignment =
+      assignments.find(
+        (assignment) =>
+          assignment.user?.id === user?.id ||
+          assignment.user?.username === user?.username
+      ) || null;
+
+    if (!currentAssignment) {
+      setError("You need to be assigned to this task before updating progress.");
+      return;
+    }
+
+    const nextValue =
+      taskProgressInputs[task.id] ?? String(currentAssignment.progress ?? 0);
+    const parsedValue = Number.parseInt(nextValue, 10);
+
+    if (!Number.isFinite(parsedValue) || parsedValue < 0 || parsedValue > 100) {
+      setError("Progress must be a whole number between 0 and 100.");
+      return;
+    }
+
+    setUpdatingProgressTaskId(task.id);
+    setError("");
+
+    try {
+      await updateTaskProgress(task.id, { progress: parsedValue });
+      setTaskProgressInputs((prev) => ({
+        ...prev,
+        [task.id]: String(parsedValue)
+      }));
+      await loadScreen();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to update task progress."
+      );
+    } finally {
+      setUpdatingProgressTaskId("");
     }
   };
 
@@ -750,7 +857,11 @@ export default function EventDetailScreen() {
         paymentMethod: "CASH",
         referenceId: ""
       });
-      await loadScreen();
+      if (donationPage !== 1) {
+        setDonationPage(1);
+      } else {
+        await loadScreen();
+      }
     } catch (err) {
       setFinanceError(
         err instanceof Error ? err.message : "Failed to record donation."
@@ -786,7 +897,11 @@ export default function EventDetailScreen() {
         amount
       });
       setExpenseForm({ title: "", amount: "" });
-      await loadScreen();
+      if (expensePage !== 1) {
+        setExpensePage(1);
+      } else {
+        await loadScreen();
+      }
     } catch (err) {
       setFinanceError(
         err instanceof Error ? err.message : "Failed to record expense."
@@ -892,7 +1007,7 @@ export default function EventDetailScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => loadScreen("refresh")}
+            onRefresh={() => loadScreen({ mode: "refresh" })}
             tintColor={colors.primary}
           />
         }
@@ -1288,138 +1403,318 @@ export default function EventDetailScreen() {
 
         {activeSection === "tasks" ? (
           <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Tasks</Text>
-          <Text style={styles.sectionSubtitle}>
-            Assigned members can update status. Managers can assign and delete.
-          </Text>
-
-          <View style={styles.taskStatRow}>
-            <View style={styles.taskStat}>
-              <Text style={styles.taskStatLabel}>Pending</Text>
-              <Text style={styles.taskStatValue}>{taskStats.PENDING}</Text>
+            <View style={styles.sectionHeaderRow}>
+              <View style={styles.sectionHeaderCopy}>
+                <Text style={styles.sectionTitle}>Tasks</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Assigned members can update status. Managers can assign and
+                  delete.
+                </Text>
+              </View>
+              {hasHiddenTasks ? (
+                <Pressable
+                  onPress={() => setShowAllTasks((prev) => !prev)}
+                  style={({ pressed }) => [
+                    styles.inlineToggleButton,
+                    pressed && styles.buttonPressed
+                  ]}
+                >
+                  <Text style={styles.inlineToggleText}>
+                    {showAllTasks ? "Show 3" : "Show all"}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
-            <View style={styles.taskStat}>
-              <Text style={styles.taskStatLabel}>In progress</Text>
-              <Text style={styles.taskStatValue}>{taskStats.IN_PROGRESS}</Text>
+
+            <View style={styles.taskStatRow}>
+              <View style={styles.taskStat}>
+                <Text style={styles.taskStatLabel}>Pending</Text>
+                <Text style={styles.taskStatValue}>{taskStats.PENDING}</Text>
+              </View>
+              <View style={styles.taskStat}>
+                <Text style={styles.taskStatLabel}>In progress</Text>
+                <Text style={styles.taskStatValue}>{taskStats.IN_PROGRESS}</Text>
+              </View>
+              <View style={styles.taskStat}>
+                <Text style={styles.taskStatLabel}>Completed</Text>
+                <Text style={styles.taskStatValue}>{taskStats.COMPLETED}</Text>
+              </View>
             </View>
-            <View style={styles.taskStat}>
-              <Text style={styles.taskStatLabel}>Completed</Text>
-              <Text style={styles.taskStatValue}>{taskStats.COMPLETED}</Text>
-            </View>
-          </View>
 
-          <View style={styles.list}>
-            {tasks.length ? (
-              tasks.map((task) => (
-                <View key={task.id} style={styles.taskCard}>
-                  <View style={styles.taskHeader}>
-                    <View style={styles.listCopy}>
-                      <Text style={styles.listTitle}>{task.title}</Text>
-                      <Text style={styles.listMeta}>
-                        {task.description || "No description"} |{" "}
-                        {formatDate(task.createdAt)}
-                      </Text>
-                    </View>
-                    <Text style={styles.statusPill}>{task.status}</Text>
-                  </View>
+            <View style={styles.list}>
+              {visibleTasks.length ? (
+                visibleTasks.map((task) => {
+                  const assignments = Array.isArray(task.assignments)
+                    ? task.assignments
+                    : [];
+                  const currentAssignment =
+                    assignments.find(
+                      (assignment) =>
+                        assignment.user?.id === user?.id ||
+                        assignment.user?.username === user?.username
+                    ) || null;
+                  const canUpdateThisTask =
+                    canManageTasks || Boolean(currentAssignment);
+                  const progressInputValue =
+                    taskProgressInputs[task.id] ??
+                    String(clampProgress(currentAssignment?.progress ?? 0));
+                  const isAssignPanelOpen = activeAssignTaskId === task.id;
 
-                  <ChoiceChips
-                    options={TASK_STATUSES}
-                    value={task.status}
-                    onChange={(nextStatus) => {
-                      void handleUpdateTaskStatus(task, nextStatus);
-                    }}
-                    disabled={updatingTaskId === task.id}
-                  />
+                  return (
+                    <View key={task.id} style={styles.taskCard}>
+                      <View style={styles.taskHeader}>
+                        <View style={styles.listCopy}>
+                          <Text style={styles.listTitle}>{task.title}</Text>
+                          <Text style={styles.listMeta}>
+                            {task.description || "No description"} |{" "}
+                            {formatDate(task.createdAt)}
+                          </Text>
+                        </View>
+                        <Text style={styles.statusPill}>{task.status}</Text>
+                      </View>
 
-                  {canManageTasks ? (
-                    <View style={styles.manageBlock}>
-                      <Text style={styles.helperText}>
-                        Assign by typing a username or tapping an event member.
-                      </Text>
-                      <TextInput
-                        value={taskAssignees[task.id] || ""}
-                        onChangeText={(value) =>
-                          setTaskAssignees((prev) => ({
-                            ...prev,
-                            [task.id]: value.toLowerCase()
-                          }))
+                      <ChoiceChips
+                        options={TASK_STATUSES}
+                        value={task.status}
+                        onChange={(nextStatus) => {
+                          void handleUpdateTaskStatus(task, nextStatus);
+                        }}
+                        disabled={
+                          updatingTaskId === task.id || !canUpdateThisTask
                         }
-                        autoCapitalize="none"
-                        placeholder="member username"
-                        placeholderTextColor={colors.muted}
-                        style={styles.input}
                       />
 
-                      <View style={styles.memberChipWrap}>
-                        {memberUsernames.map((username) => (
-                          <Pressable
-                            key={`${task.id}-${username}`}
-                            onPress={() =>
-                              setTaskAssignees((prev) => ({
-                                ...prev,
-                                [task.id]: username
-                              }))
-                            }
-                            style={({ pressed }) => [
-                              styles.memberChip,
-                              pressed && styles.choiceChipPressed
-                            ]}
-                          >
-                            <Text style={styles.memberChipText}>@{username}</Text>
-                          </Pressable>
-                        ))}
+                      {!canUpdateThisTask ? (
+                        <Text style={styles.helperText}>
+                          You can update the status after you are assigned to
+                          this task.
+                        </Text>
+                      ) : null}
+
+                      <View style={styles.assignmentSection}>
+                        <Text style={styles.label}>Assigned members</Text>
+
+                        {assignments.length ? (
+                          <View style={styles.assignmentList}>
+                            {assignments.map((assignment) => {
+                              const assignmentProgress = clampProgress(
+                                Number(assignment.progress ?? 0)
+                              );
+                              const assignmentName =
+                                assignment.user?.name ||
+                                assignment.user?.username ||
+                                "Member";
+                              const assignmentMeta = assignment.user?.username
+                                ? `@${assignment.user.username}${
+                                    assignment.user?.email
+                                      ? ` | ${assignment.user.email}`
+                                      : ""
+                                  }`
+                                : assignment.user?.email || "No email";
+
+                              return (
+                                <View
+                                  key={assignment.id}
+                                  style={styles.assignmentCard}
+                                >
+                                  <View style={styles.assignmentHeader}>
+                                    <View style={styles.listCopy}>
+                                      <Text style={styles.listTitle}>
+                                        {assignmentName}
+                                      </Text>
+                                      <Text style={styles.listMeta}>
+                                        {assignmentMeta}
+                                      </Text>
+                                    </View>
+                                    <Text style={styles.assignmentProgressText}>
+                                      {assignmentProgress}%
+                                    </Text>
+                                  </View>
+                                  <View style={styles.progressTrack}>
+                                    <View
+                                      style={[
+                                        styles.progressFill,
+                                        {
+                                          width: `${assignmentProgress}%`
+                                        }
+                                      ]}
+                                    />
+                                  </View>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        ) : (
+                          <Text style={styles.helperText}>
+                            No one is assigned yet.
+                          </Text>
+                        )}
                       </View>
 
-                      <View style={styles.actionRow}>
-                        <Pressable
-                          onPress={() => {
-                            void handleAssignTask(task.id);
-                          }}
-                          disabled={assigningTaskId === task.id}
-                          style={({ pressed }) => [
-                            styles.secondaryButton,
-                            styles.actionButton,
-                            pressed && styles.buttonPressed,
-                            assigningTaskId === task.id && styles.buttonDisabled
-                          ]}
-                        >
-                          {assigningTaskId === task.id ? (
-                            <ActivityIndicator color={colors.textHeading} />
-                          ) : (
-                            <Text style={styles.secondaryButtonText}>
-                              Assign task
-                            </Text>
-                          )}
-                        </Pressable>
+                      {currentAssignment ? (
+                        <View style={styles.progressEditorCard}>
+                          <Text style={styles.label}>My progress</Text>
+                          <Text style={styles.helperText}>
+                            Update your progress from mobile just like the
+                            website task screen.
+                          </Text>
+                          <View style={styles.progressInputRow}>
+                            <TextInput
+                              value={progressInputValue}
+                              onChangeText={(value) =>
+                                setTaskProgressInputs((prev) => ({
+                                  ...prev,
+                                  [task.id]: value.replace(/[^0-9]/g, "")
+                                }))
+                              }
+                              keyboardType="numeric"
+                              placeholder="0 - 100"
+                              placeholderTextColor={colors.muted}
+                              style={[styles.input, styles.progressInput]}
+                            />
+                            <Pressable
+                              onPress={() => {
+                                void handleUpdateTaskProgress(task);
+                              }}
+                              disabled={updatingProgressTaskId === task.id}
+                              style={({ pressed }) => [
+                                styles.secondaryButton,
+                                styles.progressActionButton,
+                                pressed && styles.buttonPressed,
+                                updatingProgressTaskId === task.id &&
+                                  styles.buttonDisabled
+                              ]}
+                            >
+                              {updatingProgressTaskId === task.id ? (
+                                <ActivityIndicator color={colors.textHeading} />
+                              ) : (
+                                <Text style={styles.secondaryButtonText}>
+                                  Save progress
+                                </Text>
+                              )}
+                            </Pressable>
+                          </View>
+                        </View>
+                      ) : null}
 
-                        <Pressable
-                          onPress={() => confirmDeleteTask(task.id)}
-                          disabled={deletingTaskId === task.id}
-                          style={({ pressed }) => [
-                            styles.dangerGhostButton,
-                            styles.actionButton,
-                            pressed && styles.buttonPressed,
-                            deletingTaskId === task.id && styles.buttonDisabled
-                          ]}
-                        >
-                          {deletingTaskId === task.id ? (
-                            <ActivityIndicator color={colors.error} />
-                          ) : (
-                            <Text style={styles.dangerGhostButtonText}>
-                              Delete
-                            </Text>
-                          )}
-                        </Pressable>
-                      </View>
+                      {canManageTasks ? (
+                        <>
+                          <View style={styles.actionRow}>
+                            <Pressable
+                              onPress={() =>
+                                setActiveAssignTaskId((prev) =>
+                                  prev === task.id ? "" : task.id
+                                )
+                              }
+                              style={({ pressed }) => [
+                                styles.secondaryButton,
+                                styles.actionButton,
+                                pressed && styles.buttonPressed
+                              ]}
+                            >
+                              <Text style={styles.secondaryButtonText}>
+                                {isAssignPanelOpen
+                                  ? "Hide add people"
+                                  : assignments.length
+                                    ? "Add people"
+                                    : "Assign people"}
+                              </Text>
+                            </Pressable>
+
+                            <Pressable
+                              onPress={() => confirmDeleteTask(task.id)}
+                              disabled={deletingTaskId === task.id}
+                              style={({ pressed }) => [
+                                styles.dangerGhostButton,
+                                styles.actionButton,
+                                pressed && styles.buttonPressed,
+                                deletingTaskId === task.id &&
+                                  styles.buttonDisabled
+                              ]}
+                            >
+                              {deletingTaskId === task.id ? (
+                                <ActivityIndicator color={colors.error} />
+                              ) : (
+                                <Text style={styles.dangerGhostButtonText}>
+                                  Delete
+                                </Text>
+                              )}
+                            </Pressable>
+                          </View>
+
+                          {isAssignPanelOpen ? (
+                            <View style={styles.manageBlock}>
+                              <Text style={styles.helperText}>
+                                Add more people by typing a username or tapping
+                                an event member.
+                              </Text>
+                              <TextInput
+                                value={taskAssignees[task.id] || ""}
+                                onChangeText={(value) =>
+                                  setTaskAssignees((prev) => ({
+                                    ...prev,
+                                    [task.id]: value.toLowerCase()
+                                  }))
+                                }
+                                autoCapitalize="none"
+                                placeholder="member username"
+                                placeholderTextColor={colors.muted}
+                                style={styles.input}
+                              />
+
+                              <View style={styles.memberChipWrap}>
+                                {memberUsernames.map((username) => (
+                                  <Pressable
+                                    key={`${task.id}-${username}`}
+                                    onPress={() =>
+                                      setTaskAssignees((prev) => ({
+                                        ...prev,
+                                        [task.id]: username
+                                      }))
+                                    }
+                                    style={({ pressed }) => [
+                                      styles.memberChip,
+                                      pressed && styles.choiceChipPressed
+                                    ]}
+                                  >
+                                    <Text style={styles.memberChipText}>
+                                      @{username}
+                                    </Text>
+                                  </Pressable>
+                                ))}
+                              </View>
+
+                              <Pressable
+                                onPress={() => {
+                                  void handleAssignTask(task.id);
+                                }}
+                                disabled={assigningTaskId === task.id}
+                                style={({ pressed }) => [
+                                  styles.secondaryButton,
+                                  pressed && styles.buttonPressed,
+                                  assigningTaskId === task.id &&
+                                    styles.buttonDisabled
+                                ]}
+                              >
+                                {assigningTaskId === task.id ? (
+                                  <ActivityIndicator color={colors.textHeading} />
+                                ) : (
+                                  <Text style={styles.secondaryButtonText}>
+                                    Assign member
+                                  </Text>
+                                )}
+                              </Pressable>
+                            </View>
+                          ) : null}
+                        </>
+                      ) : null}
                     </View>
-                  ) : null}
-                </View>
-              ))
-            ) : (
-              <Text style={styles.mutedText}>No tasks yet.</Text>
-            )}
-          </View>
+                  );
+                })
+              ) : (
+                <Text style={styles.mutedText}>No tasks yet.</Text>
+              )}
+            </View>
           </View>
         ) : null}
 
@@ -1538,14 +1833,39 @@ export default function EventDetailScreen() {
             ) : null}
 
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Current team</Text>
-              <Text style={styles.sectionSubtitle}>
-                Review membership, update roles, and remove access when needed.
-              </Text>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionHeaderCopy}>
+                  <Text style={styles.sectionTitle}>Current team</Text>
+                  <Text style={styles.sectionSubtitle}>
+                    Review membership, update roles, and remove access when
+                    needed.
+                  </Text>
+                </View>
+                {hasHiddenMembers ? (
+                  <Pressable
+                    onPress={() => setShowAllMembers((prev) => !prev)}
+                    style={({ pressed }) => [
+                      styles.inlineToggleButton,
+                      pressed && styles.buttonPressed
+                    ]}
+                  >
+                    <Text style={styles.inlineToggleText}>
+                      {showAllMembers ? "Key roles" : "Show all"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+
+              {!showAllMembers && !visibleMembers.length && members.length ? (
+                <Text style={styles.helperText}>
+                  No SUPER_ADMIN, ADMIN, or FINANCE members to show yet. Use
+                  the toggle to view the full team.
+                </Text>
+              ) : null}
 
               <View style={styles.list}>
-                {members.length ? (
-                  members.map((member) => {
+                {visibleMembers.length ? (
+                  visibleMembers.map((member) => {
                     const username = member.user?.username || "";
                     const isCurrentUser = member.user?.id === user?.id;
                     const isUpdatingThisMember =
@@ -1606,7 +1926,7 @@ export default function EventDetailScreen() {
                       </View>
                     );
                   })
-                ) : (
+                ) : members.length ? null : (
                   <Text style={styles.mutedText}>No members found.</Text>
                 )}
               </View>
@@ -1669,23 +1989,21 @@ export default function EventDetailScreen() {
                   {event.donationUpiId || "Not configured yet"}
                 </Text>
 
-                {canManageFinance ? (
-                  <Pressable
-                    onPress={handleGenerateQr}
-                    disabled={loadingQr}
-                    style={({ pressed }) => [
-                      styles.secondaryButton,
-                      pressed && styles.buttonPressed,
-                      loadingQr && styles.buttonDisabled
-                    ]}
-                  >
-                    {loadingQr ? (
-                      <ActivityIndicator color={colors.textHeading} />
-                    ) : (
-                      <Text style={styles.secondaryButtonText}>Generate QR</Text>
-                    )}
-                  </Pressable>
-                ) : null}
+                <Pressable
+                  onPress={handleGenerateQr}
+                  disabled={loadingQr}
+                  style={({ pressed }) => [
+                    styles.secondaryButton,
+                    pressed && styles.buttonPressed,
+                    loadingQr && styles.buttonDisabled
+                  ]}
+                >
+                  {loadingQr ? (
+                    <ActivityIndicator color={colors.textHeading} />
+                  ) : (
+                    <Text style={styles.secondaryButtonText}>Generate QR</Text>
+                  )}
+                </Pressable>
 
                 {donationQr ? (
                   <Image source={{ uri: donationQr }} style={styles.qrImage} />
@@ -1833,10 +2151,58 @@ export default function EventDetailScreen() {
             ) : null}
 
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Recent donations</Text>
-              <Text style={styles.sectionSubtitle}>
-                Review incoming contributions and verify pending ones.
-              </Text>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionHeaderCopy}>
+                  <Text style={styles.sectionTitle}>Donations</Text>
+                  <Text style={styles.sectionSubtitle}>
+                    {donationPagination
+                      ? `Page ${donationPagination.page} of ${donationPagination.totalPages}`
+                      : `Showing ${donations.length} donation${
+                          donations.length === 1 ? "" : "s"
+                        }`}
+                  </Text>
+                </View>
+                {donationPagination ? (
+                  <View style={styles.paginationButtonRow}>
+                    <Pressable
+                      onPress={() =>
+                        setDonationPage((prev) => Math.max(1, prev - 1))
+                      }
+                      disabled={donationPage <= 1}
+                      style={({ pressed }) => [
+                        styles.inlineToggleButton,
+                        pressed && styles.buttonPressed,
+                        donationPage <= 1 && styles.buttonDisabled
+                      ]}
+                    >
+                      <Text style={styles.inlineToggleText}>Prev</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() =>
+                        setDonationPage((prev) =>
+                          Math.min(
+                            donationPagination.totalPages || prev + 1,
+                            prev + 1
+                          )
+                        )
+                      }
+                      disabled={
+                        donationPage >=
+                        (donationPagination.totalPages || donationPage)
+                      }
+                      style={({ pressed }) => [
+                        styles.inlineToggleButton,
+                        pressed && styles.buttonPressed,
+                        donationPage >=
+                          (donationPagination.totalPages || donationPage) &&
+                          styles.buttonDisabled
+                      ]}
+                    >
+                      <Text style={styles.inlineToggleText}>Next</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
 
               <View style={styles.list}>
                 {donations.length ? (
@@ -1850,7 +2216,11 @@ export default function EventDetailScreen() {
                           {donation.donorName || "Anonymous donor"}
                         </Text>
                         <Text style={styles.listMeta}>
-                          {donation.paymentMethod || "Payment"} |{" "}
+                          {donation.paymentMethod || "Payment"}
+                          {donation.referenceId
+                            ? ` | Ref: ${donation.referenceId}`
+                            : ""}{" "}
+                          |{" "}
                           {formatDate(donation.createdAt)}
                         </Text>
                       </View>
@@ -1893,10 +2263,56 @@ export default function EventDetailScreen() {
             </View>
 
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Recent expenses</Text>
-              <Text style={styles.sectionSubtitle}>
-                Track where the event budget is being used.
-              </Text>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionHeaderCopy}>
+                  <Text style={styles.sectionTitle}>Expenses</Text>
+                  <Text style={styles.sectionSubtitle}>
+                    {expensePagination
+                      ? `Page ${expensePagination.page} of ${expensePagination.totalPages}`
+                      : "All verified payouts for this event."}
+                  </Text>
+                </View>
+                {expensePagination ? (
+                  <View style={styles.paginationButtonRow}>
+                    <Pressable
+                      onPress={() =>
+                        setExpensePage((prev) => Math.max(1, prev - 1))
+                      }
+                      disabled={expensePage <= 1}
+                      style={({ pressed }) => [
+                        styles.inlineToggleButton,
+                        pressed && styles.buttonPressed,
+                        expensePage <= 1 && styles.buttonDisabled
+                      ]}
+                    >
+                      <Text style={styles.inlineToggleText}>Prev</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() =>
+                        setExpensePage((prev) =>
+                          Math.min(
+                            expensePagination.totalPages || prev + 1,
+                            prev + 1
+                          )
+                        )
+                      }
+                      disabled={
+                        expensePage >=
+                        (expensePagination.totalPages || expensePage)
+                      }
+                      style={({ pressed }) => [
+                        styles.inlineToggleButton,
+                        pressed && styles.buttonPressed,
+                        expensePage >=
+                          (expensePagination.totalPages || expensePage) &&
+                          styles.buttonDisabled
+                      ]}
+                    >
+                      <Text style={styles.inlineToggleText}>Next</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
 
               <View style={styles.list}>
                 {expenses.length ? (
@@ -2158,6 +2574,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21
   },
+  sectionHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: spacing.md
+  },
+  sectionHeaderCopy: {
+    flex: 1,
+    gap: 4
+  },
   goalAmounts: {
     flexDirection: "row",
     gap: spacing.md
@@ -2310,6 +2736,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800"
   },
+  inlineToggleButton: {
+    minHeight: 38,
+    borderRadius: 999,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 8
+  },
+  inlineToggleText: {
+    color: colors.textHeading,
+    fontSize: 13,
+    fontWeight: "800"
+  },
   dangerButton: {
     minHeight: 52,
     borderRadius: radius.md,
@@ -2346,6 +2786,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.sm
+  },
+  paginationButtonRow: {
+    flexDirection: "row",
+    gap: 8
   },
   actionButton: {
     flex: 1
@@ -2477,6 +2921,50 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: spacing.sm
+  },
+  assignmentSection: {
+    gap: spacing.sm
+  },
+  assignmentList: {
+    gap: spacing.sm
+  },
+  assignmentCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: colors.border
+  },
+  assignmentHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm
+  },
+  assignmentProgressText: {
+    color: colors.textHeading,
+    fontSize: 13,
+    fontWeight: "800"
+  },
+  progressEditorCard: {
+    backgroundColor: colors.white,
+    borderRadius: radius.md,
+    padding: spacing.sm,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border
+  },
+  progressInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm
+  },
+  progressInput: {
+    flex: 1
+  },
+  progressActionButton: {
+    paddingHorizontal: 14
   },
   manageBlock: {
     gap: spacing.sm
