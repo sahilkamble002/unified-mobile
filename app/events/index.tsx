@@ -117,9 +117,17 @@ export default function EventsScreen() {
               </Text>
             </View>
 
-            <Pressable onPress={logout} style={styles.logoutButton}>
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            </Pressable>
+            <View style={styles.heroActions}>
+              <Link href="/notifications" asChild>
+                <Pressable style={styles.heroActionButton}>
+                  <Text style={styles.heroActionButtonText}>Notifications</Text>
+                </Pressable>
+              </Link>
+
+              <Pressable onPress={logout} style={styles.logoutButton}>
+                <Text style={styles.logoutButtonText}>Logout</Text>
+              </Pressable>
+            </View>
           </View>
 
           <View style={styles.userChip}>
@@ -271,6 +279,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: spacing.md
   },
+  heroActions: {
+    gap: spacing.sm
+  },
   heroCopy: {
     flex: 1,
     gap: spacing.xs
@@ -298,6 +309,16 @@ const styles = StyleSheet.create({
     borderColor: colors.heroBorder,
     paddingHorizontal: 14,
     paddingVertical: 10
+  },
+  heroActionButton: {
+    borderRadius: 999,
+    backgroundColor: colors.white,
+    paddingHorizontal: 14,
+    paddingVertical: 10
+  },
+  heroActionButtonText: {
+    color: colors.textHeading,
+    fontWeight: "800"
   },
   logoutButtonText: {
     color: colors.white,
