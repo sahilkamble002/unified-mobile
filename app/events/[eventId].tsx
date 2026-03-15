@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Platform,
   Pressable,
   RefreshControl,
   SafeAreaView,
@@ -779,7 +780,25 @@ export default function EventDetailScreen() {
   };
 
   const confirmRemoveMember = (username: string) => {
-    Alert.alert("Remove member?", `Remove @${username} from this event?`, [
+    if (!username) {
+      setError("This member cannot be removed because the username is missing.");
+      return;
+    }
+
+    const message = `Remove @${username} from this event?`;
+
+    if (Platform.OS === "web") {
+      const shouldRemove =
+        typeof window !== "undefined" ? window.confirm(message) : false;
+
+      if (shouldRemove) {
+        void handleRemoveMember(username);
+      }
+
+      return;
+    }
+
+    Alert.alert("Remove member?", message, [
       { text: "Cancel", style: "cancel" },
       {
         text: "Remove",

@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import {
   clearStoredAuth,
   getAccessToken,
@@ -41,11 +42,14 @@ const unwrapData = <T>(payload: any): T => {
 };
 
 const getApiBaseUrl = () => {
-  const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+  const apiUrl =
+    process.env.EXPO_PUBLIC_API_URL ||
+    Constants.expoConfig?.extra?.apiUrl ||
+    Constants.manifest2?.extra?.expoClient?.extra?.apiUrl;
 
   if (!apiUrl) {
     throw new Error(
-      "EXPO_PUBLIC_API_URL is not configured. Add it to your mobile .env file."
+      "EXPO_PUBLIC_API_URL is not configured. Add it to your mobile .env file or app config."
     );
   }
 
