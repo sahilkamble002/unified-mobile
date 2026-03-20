@@ -14,6 +14,7 @@ import {
   View
 } from "react-native";
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
+import { apiRequest } from "@/src/api/client";
 import {
   addEventMember,
   deleteEvent,
@@ -31,7 +32,6 @@ import {
   getFinanceSummary,
   getEventDonations,
   getEventExpenses,
-  verifyDonation,
   type Donation,
   type Expense,
   type FinanceSummary
@@ -124,6 +124,36 @@ const formatLabel = (value: string) =>
     .join(" ");
 
 const clampProgress = (value: number) => Math.max(0, Math.min(100, value));
+const getDonationStatusLabel = (status: string | null | undefined) => {
+  if (!status || status === "PENDING") {
+    return "Not verified";
+  }
+
+  if (status === "SUCCESS") {
+    return "Verified";
+  }
+
+  return formatLabel(status);
+};
+
+const updateExpenseRequest = (
+  eventId: string,
+  expenseId: string,
+  payload: { title: string; amount: number }
+) =>
+  apiRequest<Expense>(`/finance/${eventId}/expense/${expenseId}`, {
+    method: "PATCH",
+    body: payload
+  });
+
+const updateDonationStatusRequest = (
+  donationId: string,
+  status: "PENDING" | "SUCCESS"
+) =>
+  apiRequest<Donation>(`/finance/donation/${donationId}/verify`, {
+    method: "PATCH",
+    body: { status }
+  });
 
 type ChoiceChipsProps = {
   options: readonly string[];
@@ -259,6 +289,7 @@ export default function EventDetailScreen() {
     title: "",
     amount: ""
   });
+  const [editingExpenseId, setEditingExpenseId] = useState("");
   const [notificationForm, setNotificationForm] = useState({
     title: "",
     message: "",
@@ -272,6 +303,12 @@ export default function EventDetailScreen() {
   const [loadingQr, setLoadingQr] = useState(false);
   const [donationQr, setDonationQr] = useState("");
   const [verifyingDonationId, setVerifyingDonationId] = useState("");
+  const isEditingExpense = Boolean(editingExpenseId);
+
+  const resetExpenseForm = useCallback(() => {
+    setExpenseForm({ title: "", amount: "" });
+    setEditingExpenseId("");
+  }, []);
 
   const members = useMemo(
     () => (Array.isArray(event?.members) ? event.members.filter(Boolean) : []),
@@ -494,7 +531,8 @@ export default function EventDetailScreen() {
     setLoadingTaskDetails({});
     setNotificationError("");
     setNotificationSuccess("");
-  }, [eventId]);
+    resetExpenseForm();
+  }, [eventId, resetExpenseForm]);
 
   useEffect(() => {
     const tasksMissingAssignments = tasks.filter(
@@ -1005,7 +1043,7 @@ export default function EventDetailScreen() {
     }
   };
 
-  const handleCreateExpense = async () => {
+  const handleSaveExpense = async () => {
     if (!eventId) {
       return;
     }
@@ -1026,23 +1064,53 @@ export default function EventDetailScreen() {
     setFinanceError("");
 
     try {
-      await createExpense(eventId, {
+      const payload = {
         title: expenseForm.title.trim(),
         amount
-      });
-      setExpenseForm({ title: "", amount: "" });
-      if (expensePage !== 1) {
-        setExpensePage(1);
+      };
+
+      if (editingExpenseId) {
+        await updateExpenseRequest(eventId, editingExpenseId, payload);
       } else {
-        await loadScreen();
+        await createExpense(eventId, payload);
+      }
+
+      resetExpenseForm();
+
+      const nextExpensePage = editingExpenseId ? expensePage : 1;
+      if (expensePage !== nextExpensePage) {
+        setExpensePage(nextExpensePage);
+      } else {
+        await loadScreen({ expensePage: nextExpensePage });
       }
     } catch (err) {
       setFinanceError(
-        err instanceof Error ? err.message : "Failed to record expense."
+        err instanceof Error
+          ? err.message
+          : editingExpenseId
+            ? "Failed to update expense."
+            : "Failed to record expense."
       );
     } finally {
       setCreatingExpense(false);
     }
+  };
+
+  const handleStartExpenseEdit = (expense: Expense) => {
+    setEditingExpenseId(expense.id);
+    setExpenseForm({
+      title: expense.title || "",
+      amount:
+        expense.amount === null || expense.amount === undefined
+          ? ""
+          : String(expense.amount)
+    });
+    setFinanceError("");
+  };
+
+  const handleCancelExpenseEdit = () => {
+    resetExpenseForm();
+    setFinanceError("");
   };
 
   const handleGenerateQr = async () => {
@@ -1070,16 +1138,23 @@ export default function EventDetailScreen() {
     }
   };
 
-  const handleVerifyDonation = async (donationId: string) => {
+  const handleUpdateDonationStatus = async (
+    donationId: string,
+    status: "PENDING" | "SUCCESS"
+  ) => {
     setVerifyingDonationId(donationId);
     setFinanceError("");
 
     try {
-      await verifyDonation(donationId);
+      await updateDonationStatusRequest(donationId, status);
       await loadScreen();
     } catch (err) {
       setFinanceError(
-        err instanceof Error ? err.message : "Failed to verify donation."
+        err instanceof Error
+          ? err.message
+          : status === "SUCCESS"
+            ? "Failed to verify donation."
+            : "Failed to mark donation as not verified."
       );
     } finally {
       setVerifyingDonationId("");
@@ -1748,12 +1823,8 @@ export default function EventDetailScreen() {
                                 assignment.user?.username ||
                                 "Member";
                               const assignmentMeta = assignment.user?.username
-                                ? `@${assignment.user.username}${
-                                    assignment.user?.email
-                                      ? ` | ${assignment.user.email}`
-                                      : ""
-                                  }`
-                                : assignment.user?.email || "No email";
+                                ? `@${assignment.user.username}`
+                                : assignmentName;
 
                               return (
                                 <View
@@ -2061,7 +2132,7 @@ export default function EventDetailScreen() {
                             {result.name || result.username}
                           </Text>
                           <Text style={styles.searchResultMeta}>
-                            @{result.username} | {result.email}
+                            @{result.username}
                           </Text>
                         </Pressable>
                       ))}
@@ -2135,8 +2206,7 @@ export default function EventDetailScreen() {
                             {member.user?.name || username || "Member"}
                           </Text>
                           <Text style={styles.listMeta}>
-                            @{username || "username"} |{" "}
-                            {member.user?.email || "No email"}
+                            @{username || "username"}
                           </Text>
                         </View>
 
@@ -2371,7 +2441,9 @@ export default function EventDetailScreen() {
                     </View>
 
                     <View style={styles.financeFormCard}>
-                      <Text style={styles.subSectionTitle}>Record expense</Text>
+                      <Text style={styles.subSectionTitle}>
+                        {isEditingExpense ? "Edit expense" : "Record expense"}
+                      </Text>
                       <View style={styles.field}>
                         <Text style={styles.label}>Title</Text>
                         <TextInput
@@ -2401,8 +2473,20 @@ export default function EventDetailScreen() {
                         />
                       </View>
 
+                      {isEditingExpense ? (
+                        <Pressable
+                          onPress={handleCancelExpenseEdit}
+                          style={({ pressed }) => [
+                            styles.secondaryButton,
+                            pressed && styles.buttonPressed
+                          ]}
+                        >
+                          <Text style={styles.secondaryButtonText}>Cancel</Text>
+                        </Pressable>
+                      ) : null}
+
                       <Pressable
-                        onPress={handleCreateExpense}
+                        onPress={handleSaveExpense}
                         disabled={creatingExpense}
                         style={({ pressed }) => [
                           styles.primaryButton,
@@ -2414,7 +2498,7 @@ export default function EventDetailScreen() {
                           <ActivityIndicator color={colors.white} />
                         ) : (
                           <Text style={styles.primaryButtonText}>
-                            Save expense
+                            {isEditingExpense ? "Update expense" : "Save expense"}
                           </Text>
                         )}
                       </Pressable>
@@ -2503,12 +2587,18 @@ export default function EventDetailScreen() {
                           +{formatAmount(donation.amount)}
                         </Text>
                         <Text style={styles.listMeta}>
-                          {donation.status || "SUCCESS"}
+                          {getDonationStatusLabel(donation.status)}
                         </Text>
-                        {canManageFinance && donation.status === "PENDING" ? (
+                        {canManageFinance &&
+                        ["PENDING", "SUCCESS", null, undefined].includes(
+                          donation.status
+                        ) ? (
                           <Pressable
                             onPress={() => {
-                              void handleVerifyDonation(donation.id);
+                              void handleUpdateDonationStatus(
+                                donation.id,
+                                donation.status === "SUCCESS" ? "PENDING" : "SUCCESS"
+                              );
                             }}
                             disabled={verifyingDonationId === donation.id}
                             style={({ pressed }) => [
@@ -2522,7 +2612,9 @@ export default function EventDetailScreen() {
                               <ActivityIndicator color={colors.textHeading} />
                             ) : (
                               <Text style={styles.secondaryButtonText}>
-                                Verify
+                                {donation.status === "SUCCESS"
+                                  ? "Mark not verified"
+                                  : "Verify"}
                               </Text>
                             )}
                           </Pressable>
@@ -2543,7 +2635,7 @@ export default function EventDetailScreen() {
                   <Text style={styles.sectionSubtitle}>
                     {expensePagination
                       ? `Page ${expensePagination.page} of ${expensePagination.totalPages}`
-                      : "All verified payouts for this event."}
+                      : "All recorded payouts for this event."}
                   </Text>
                 </View>
                 {expensePagination ? (
@@ -2604,9 +2696,22 @@ export default function EventDetailScreen() {
                           | {formatDate(expense.createdAt)}
                         </Text>
                       </View>
-                      <Text style={styles.negativeAmount}>
-                        -{formatAmount(expense.amount)}
-                      </Text>
+                      <View style={styles.amountBlock}>
+                        <Text style={styles.negativeAmount}>
+                          -{formatAmount(expense.amount)}
+                        </Text>
+                        {canManageFinance ? (
+                          <Pressable
+                            onPress={() => handleStartExpenseEdit(expense)}
+                            style={({ pressed }) => [
+                              styles.secondaryButton,
+                              pressed && styles.buttonPressed
+                            ]}
+                          >
+                            <Text style={styles.secondaryButtonText}>Edit</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
                     </View>
                   ))
                 ) : (

@@ -73,12 +73,15 @@ export default function RegisterScreen() {
   return (
     <SafeAreaView style={styles.screen}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 24 : 0}
         style={styles.flex}
       >
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, styles.scrollContentGrow]}
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
           <View style={styles.hero}>
             <Text style={styles.brand}>ERP</Text>
@@ -228,6 +231,10 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: spacing.lg,
     gap: spacing.lg
+  },
+  scrollContentGrow: {
+    flexGrow: 1,
+    paddingBottom: spacing.xxl
   },
   hero: {
     backgroundColor: colors.heroSecondary,

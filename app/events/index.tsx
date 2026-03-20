@@ -133,7 +133,7 @@ export default function EventsScreen() {
           <View style={styles.userChip}>
             <Text style={styles.userChipName}>{user?.name ?? "Member"}</Text>
             <Text style={styles.userChipMeta}>
-              @{user?.username ?? "username"} · {user?.email ?? "no-email"}
+              @{user?.username ?? "username"}
             </Text>
           </View>
 
