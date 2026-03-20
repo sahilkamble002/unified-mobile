@@ -126,11 +126,15 @@ const formatLabel = (value: string) =>
 const clampProgress = (value: number) => Math.max(0, Math.min(100, value));
 const getDonationStatusLabel = (status: string | null | undefined) => {
   if (!status || status === "PENDING") {
-    return "Not verified";
+    return "Pending review";
   }
 
   if (status === "SUCCESS") {
     return "Verified";
+  }
+
+  if (status === "FAILED") {
+    return "Not verified";
   }
 
   return formatLabel(status);
@@ -148,7 +152,7 @@ const updateExpenseRequest = (
 
 const updateDonationStatusRequest = (
   donationId: string,
-  status: "PENDING" | "SUCCESS"
+  status: "FAILED" | "SUCCESS"
 ) =>
   apiRequest<Donation>(`/finance/donation/${donationId}/verify`, {
     method: "PATCH",
@@ -1140,7 +1144,7 @@ export default function EventDetailScreen() {
 
   const handleUpdateDonationStatus = async (
     donationId: string,
-    status: "PENDING" | "SUCCESS"
+    status: "FAILED" | "SUCCESS"
   ) => {
     setVerifyingDonationId(donationId);
     setFinanceError("");
@@ -2590,34 +2594,49 @@ export default function EventDetailScreen() {
                           {getDonationStatusLabel(donation.status)}
                         </Text>
                         {canManageFinance &&
-                        ["PENDING", "SUCCESS", null, undefined].includes(
-                          donation.status
-                        ) ? (
-                          <Pressable
-                            onPress={() => {
-                              void handleUpdateDonationStatus(
-                                donation.id,
-                                donation.status === "SUCCESS" ? "PENDING" : "SUCCESS"
-                              );
-                            }}
-                            disabled={verifyingDonationId === donation.id}
-                            style={({ pressed }) => [
-                              styles.secondaryButton,
-                              pressed && styles.buttonPressed,
-                              verifyingDonationId === donation.id &&
-                                styles.buttonDisabled
-                            ]}
-                          >
-                            {verifyingDonationId === donation.id ? (
-                              <ActivityIndicator color={colors.textHeading} />
-                            ) : (
-                              <Text style={styles.secondaryButtonText}>
-                                {donation.status === "SUCCESS"
-                                  ? "Mark not verified"
-                                  : "Verify"}
-                              </Text>
-                            )}
-                          </Pressable>
+                        (!donation.status || donation.status === "PENDING") ? (
+                          <>
+                            <Pressable
+                              onPress={() => {
+                                void handleUpdateDonationStatus(donation.id, "SUCCESS");
+                              }}
+                              disabled={verifyingDonationId === donation.id}
+                              style={({ pressed }) => [
+                                styles.secondaryButton,
+                                pressed && styles.buttonPressed,
+                                verifyingDonationId === donation.id &&
+                                  styles.buttonDisabled
+                              ]}
+                            >
+                              {verifyingDonationId === donation.id ? (
+                                <ActivityIndicator color={colors.textHeading} />
+                              ) : (
+                                <Text style={styles.secondaryButtonText}>
+                                  Verify
+                                </Text>
+                              )}
+                            </Pressable>
+                            <Pressable
+                              onPress={() => {
+                                void handleUpdateDonationStatus(donation.id, "FAILED");
+                              }}
+                              disabled={verifyingDonationId === donation.id}
+                              style={({ pressed }) => [
+                                styles.secondaryButton,
+                                pressed && styles.buttonPressed,
+                                verifyingDonationId === donation.id &&
+                                  styles.buttonDisabled
+                              ]}
+                            >
+                              {verifyingDonationId === donation.id ? (
+                                <ActivityIndicator color={colors.textHeading} />
+                              ) : (
+                                <Text style={styles.secondaryButtonText}>
+                                  Not verify
+                                </Text>
+                              )}
+                            </Pressable>
+                          </>
                         ) : null}
                       </View>
                     </View>

@@ -7,6 +7,7 @@ import {
   type ReactNode
 } from "react";
 import * as authApi from "@/src/api/auth";
+import { registerDevicePushToken, unregisterDevicePushToken } from "@/src/lib/push-notifications";
 import {
   clearStoredAuth,
   getAccessToken,
@@ -56,6 +57,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
     restoreSession();
   }, []);
 
+  useEffect(() => {
+    if (!user) {
+      return undefined;
+    }
+
+    registerDevicePushToken().catch(() => {
+      // keep auth usable even if push registration fails
+    });
+
+    return undefined;
+  }, [user]);
+
   const login = async (payload: LoginPayload) => {
     setIsLoading(true);
 
@@ -95,6 +108,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const refreshToken = await getRefreshToken();
 
     try {
+      await unregisterDevicePushToken();
       if (refreshToken) {
         await authApi.logout(refreshToken);
       }

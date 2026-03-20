@@ -24,6 +24,21 @@ export const markNotificationRead = (notificationId: string) =>
     method: "PATCH"
   });
 
+export const registerPushToken = (payload: {
+  token: string;
+  platform: "ANDROID" | "IOS";
+}) =>
+  apiRequest("/notifications/push-token", {
+    method: "POST",
+    body: payload
+  });
+
+export const unregisterPushToken = (token: string) =>
+  apiRequest("/notifications/push-token", {
+    method: "DELETE",
+    body: { token }
+  });
+
 export const createEventNotification = (
   eventId: string,
   payload: CreateEventNotificationPayload

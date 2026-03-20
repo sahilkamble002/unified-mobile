@@ -5,6 +5,7 @@ import type { User } from "@/src/types/auth";
 const ACCESS_TOKEN_KEY = "erp_access_token";
 const REFRESH_TOKEN_KEY = "erp_refresh_token";
 const USER_KEY = "erp_user";
+const PUSH_TOKEN_KEY = "erp_push_token";
 const isWeb = Platform.OS === "web";
 
 const canUseSecureStore =
@@ -105,10 +106,21 @@ export const setStoredUser = (user: User | null) => {
   return deleteItem(USER_KEY);
 };
 
+export const getPushToken = () => getItem(PUSH_TOKEN_KEY);
+
+export const setPushToken = (token: string | null) => {
+  if (token) {
+    return setItem(PUSH_TOKEN_KEY, token);
+  }
+
+  return deleteItem(PUSH_TOKEN_KEY);
+};
+
 export const clearStoredAuth = async () => {
   await Promise.all([
     deleteItem(ACCESS_TOKEN_KEY),
     deleteItem(REFRESH_TOKEN_KEY),
-    deleteItem(USER_KEY)
+    deleteItem(USER_KEY),
+    deleteItem(PUSH_TOKEN_KEY)
   ]);
 };
