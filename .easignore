@@ -1,0 +1,42 @@
+# EAS upload ignore rules
+# Keep the same exclusions as .gitignore, but allow google-services.json
+# so remote Android builds can use Firebase.
+
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+credentials.json
+android/keystores/release.keystore
+
+.metro-health-check*
+
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+.DS_Store
+*.pem
+
+.env
+.env*.local
+
+*.tsbuildinfo
+
+app-example
+
+/ios
+/android
+
+.vercel
+
+!google-services.json

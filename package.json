@@ -6,7 +6,7 @@
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
-    "build:android:apk": "npx eas build --platform android --profile apk",
+    "build:android:apk": "npx eas-cli build --platform android --profile apk",
     "ios": "expo start --ios",
     "build": "expo export --platform web",
     "web": "expo start --web",

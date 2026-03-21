@@ -381,6 +381,19 @@ export default function EventDetailScreen() {
   );
   const canManageTasks = TASK_MANAGER_ROLES.includes(currentMemberRole);
   const canManageFinance = FINANCE_ROLES.includes(currentMemberRole);
+  const canCreateDonation = [
+    "SUPER_ADMIN",
+    "ADMIN",
+    "FINANCE",
+    "VOLUNTEER"
+  ].includes(currentMemberRole);
+  const canCreateExpense = [
+    "SUPER_ADMIN",
+    "ADMIN",
+    "FINANCE",
+    "MANAGER",
+    "VOLUNTEER"
+  ].includes(currentMemberRole);
   const canManageNotifications = FINANCE_ROLES.includes(currentMemberRole);
   const canManageMembers = MEMBER_MANAGER_ROLES.includes(currentMemberRole);
   const canEditEvent = EVENT_ADMIN_ROLES.includes(currentMemberRole);
@@ -2390,162 +2403,169 @@ export default function EventDetailScreen() {
               </View>
             </View>
 
-            {canManageFinance ? (
+            {canCreateDonation || canCreateExpense ? (
               <View style={styles.card}>
                 <View style={styles.sectionCardIntro}>
-                  <Text style={styles.sectionTitle}>Record activity</Text>
+                  <Text style={styles.sectionTitle}>
+                    {canCreateDonation ? "Record activity" : "Record expense"}
+                  </Text>
                   <Text style={styles.sectionSubtitle}>
-                    Add both donations and expenses without leaving the finance
-                    section.
+                    {canCreateDonation
+                      ? "Volunteers can record donations, but only finance roles can verify them."
+                      : "Any event member except VIEWER can add an expense from here."}
                   </Text>
                 </View>
 
                 <View style={styles.sectionCardBody}>
                   <View style={styles.financeForms}>
-                    <View style={styles.financeFormCard}>
-                      <Text style={styles.subSectionTitle}>Record donation</Text>
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Donor name</Text>
-                        <TextInput
-                          value={donationForm.donorName}
-                          onChangeText={(value) =>
+                    {canCreateDonation ? (
+                      <View style={styles.financeFormCard}>
+                        <Text style={styles.subSectionTitle}>Record donation</Text>
+                        <View style={styles.field}>
+                          <Text style={styles.label}>Donor name</Text>
+                          <TextInput
+                            value={donationForm.donorName}
+                            onChangeText={(value) =>
+                              setDonationForm((prev) => ({
+                                ...prev,
+                                donorName: value
+                              }))
+                            }
+                            placeholder="Donor name"
+                            placeholderTextColor={colors.muted}
+                            style={styles.input}
+                          />
+                        </View>
+                        <View style={styles.field}>
+                          <Text style={styles.label}>Amount</Text>
+                          <TextInput
+                            value={donationForm.amount}
+                            onChangeText={(value) =>
+                              setDonationForm((prev) => ({
+                                ...prev,
+                                amount: value
+                              }))
+                            }
+                            keyboardType="numeric"
+                            placeholder="1000"
+                            placeholderTextColor={colors.muted}
+                            style={styles.input}
+                          />
+                        </View>
+                        <View style={styles.field}>
+                          <Text style={styles.label}>Reference ID</Text>
+                          <TextInput
+                            value={donationForm.referenceId}
+                            onChangeText={(value) =>
+                              setDonationForm((prev) => ({
+                                ...prev,
+                                referenceId: value
+                              }))
+                            }
+                            autoCapitalize="none"
+                            placeholder="optional reference"
+                            placeholderTextColor={colors.muted}
+                            style={styles.input}
+                          />
+                        </View>
+
+                        <ChoiceChips
+                          options={PAYMENT_METHODS}
+                          value={donationForm.paymentMethod}
+                          onChange={(nextMethod) =>
                             setDonationForm((prev) => ({
                               ...prev,
-                              donorName: value
+                              paymentMethod: nextMethod
                             }))
                           }
-                          placeholder="Donor name"
-                          placeholderTextColor={colors.muted}
-                          style={styles.input}
+                          disabled={creatingDonation}
                         />
-                      </View>
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Amount</Text>
-                        <TextInput
-                          value={donationForm.amount}
-                          onChangeText={(value) =>
-                            setDonationForm((prev) => ({
-                              ...prev,
-                              amount: value
-                            }))
-                          }
-                          keyboardType="numeric"
-                          placeholder="1000"
-                          placeholderTextColor={colors.muted}
-                          style={styles.input}
-                        />
-                      </View>
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Reference ID</Text>
-                        <TextInput
-                          value={donationForm.referenceId}
-                          onChangeText={(value) =>
-                            setDonationForm((prev) => ({
-                              ...prev,
-                              referenceId: value
-                            }))
-                          }
-                          autoCapitalize="none"
-                          placeholder="optional reference"
-                          placeholderTextColor={colors.muted}
-                          style={styles.input}
-                        />
-                      </View>
 
-                      <ChoiceChips
-                        options={PAYMENT_METHODS}
-                        value={donationForm.paymentMethod}
-                        onChange={(nextMethod) =>
-                          setDonationForm((prev) => ({
-                            ...prev,
-                            paymentMethod: nextMethod
-                          }))
-                        }
-                        disabled={creatingDonation}
-                      />
-
-                      <Pressable
-                        onPress={handleCreateDonation}
-                        disabled={creatingDonation}
-                        style={({ pressed }) => [
-                          styles.primaryButton,
-                          pressed && styles.primaryButtonPressed,
-                          creatingDonation && styles.buttonDisabled
-                        ]}
-                      >
-                        {creatingDonation ? (
-                          <ActivityIndicator color={colors.white} />
-                        ) : (
-                          <Text style={styles.primaryButtonText}>
-                            Save donation
-                          </Text>
-                        )}
-                      </Pressable>
-                    </View>
-
-                    <View style={styles.financeFormCard}>
-                      <Text style={styles.subSectionTitle}>
-                        {isEditingExpense ? "Edit expense" : "Record expense"}
-                      </Text>
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Title</Text>
-                        <TextInput
-                          value={expenseForm.title}
-                          onChangeText={(value) =>
-                            setExpenseForm((prev) => ({ ...prev, title: value }))
-                          }
-                          placeholder="Expense title"
-                          placeholderTextColor={colors.muted}
-                          style={styles.input}
-                        />
-                      </View>
-                      <View style={styles.field}>
-                        <Text style={styles.label}>Amount</Text>
-                        <TextInput
-                          value={expenseForm.amount}
-                          onChangeText={(value) =>
-                            setExpenseForm((prev) => ({
-                              ...prev,
-                              amount: value
-                            }))
-                          }
-                          keyboardType="numeric"
-                          placeholder="500"
-                          placeholderTextColor={colors.muted}
-                          style={styles.input}
-                        />
-                      </View>
-
-                      {isEditingExpense ? (
                         <Pressable
-                          onPress={handleCancelExpenseEdit}
+                          onPress={handleCreateDonation}
+                          disabled={creatingDonation}
                           style={({ pressed }) => [
-                            styles.secondaryButton,
-                            pressed && styles.buttonPressed
+                            styles.primaryButton,
+                            pressed && styles.primaryButtonPressed,
+                            creatingDonation && styles.buttonDisabled
                           ]}
                         >
-                          <Text style={styles.secondaryButtonText}>Cancel</Text>
+                          {creatingDonation ? (
+                            <ActivityIndicator color={colors.white} />
+                          ) : (
+                            <Text style={styles.primaryButtonText}>
+                              Save donation
+                            </Text>
+                          )}
                         </Pressable>
-                      ) : null}
+                      </View>
+                    ) : null}
 
-                      <Pressable
-                        onPress={handleSaveExpense}
-                        disabled={creatingExpense}
-                        style={({ pressed }) => [
-                          styles.primaryButton,
-                          pressed && styles.primaryButtonPressed,
-                          creatingExpense && styles.buttonDisabled
-                        ]}
-                      >
-                        {creatingExpense ? (
-                          <ActivityIndicator color={colors.white} />
-                        ) : (
-                          <Text style={styles.primaryButtonText}>
-                            {isEditingExpense ? "Update expense" : "Save expense"}
-                          </Text>
-                        )}
-                      </Pressable>
-                    </View>
+                    {canCreateExpense ? (
+                      <View style={styles.financeFormCard}>
+                        <Text style={styles.subSectionTitle}>
+                          {isEditingExpense ? "Edit expense" : "Record expense"}
+                        </Text>
+                        <View style={styles.field}>
+                          <Text style={styles.label}>Title</Text>
+                          <TextInput
+                            value={expenseForm.title}
+                            onChangeText={(value) =>
+                              setExpenseForm((prev) => ({ ...prev, title: value }))
+                            }
+                            placeholder="Expense title"
+                            placeholderTextColor={colors.muted}
+                            style={styles.input}
+                          />
+                        </View>
+                        <View style={styles.field}>
+                          <Text style={styles.label}>Amount</Text>
+                          <TextInput
+                            value={expenseForm.amount}
+                            onChangeText={(value) =>
+                              setExpenseForm((prev) => ({
+                                ...prev,
+                                amount: value
+                              }))
+                            }
+                            keyboardType="numeric"
+                            placeholder="500"
+                            placeholderTextColor={colors.muted}
+                            style={styles.input}
+                          />
+                        </View>
+
+                        {isEditingExpense ? (
+                          <Pressable
+                            onPress={handleCancelExpenseEdit}
+                            style={({ pressed }) => [
+                              styles.secondaryButton,
+                              pressed && styles.buttonPressed
+                            ]}
+                          >
+                            <Text style={styles.secondaryButtonText}>Cancel</Text>
+                          </Pressable>
+                        ) : null}
+
+                        <Pressable
+                          onPress={handleSaveExpense}
+                          disabled={creatingExpense}
+                          style={({ pressed }) => [
+                            styles.primaryButton,
+                            pressed && styles.primaryButtonPressed,
+                            creatingExpense && styles.buttonDisabled
+                          ]}
+                        >
+                          {creatingExpense ? (
+                            <ActivityIndicator color={colors.white} />
+                          ) : (
+                            <Text style={styles.primaryButtonText}>
+                              {isEditingExpense ? "Update expense" : "Save expense"}
+                            </Text>
+                          )}
+                        </Pressable>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
               </View>
