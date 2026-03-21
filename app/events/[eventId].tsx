@@ -69,8 +69,45 @@ const TASK_VIEW_ALL_ROLES = ["SUPER_ADMIN", "ADMIN", "FINANCE"];
 const TASK_MANAGER_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
 const FINANCE_ROLES = ["SUPER_ADMIN", "ADMIN", "FINANCE"];
 const EVENT_ADMIN_ROLES = ["SUPER_ADMIN", "ADMIN"];
+const MEMBER_MANAGER_ROLES = ["SUPER_ADMIN"];
 const LEADERSHIP_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER"];
-const MEMBER_PREVIEW_ROLES = ["SUPER_ADMIN", "ADMIN", "FINANCE"];
+const MEMBER_PREVIEW_ROLES = ["SUPER_ADMIN", "ADMIN", "MANAGER", "FINANCE"];
+const EVENT_ROLE_LIMITS: Partial<Record<(typeof ROLES)[number], number>> = {
+  SUPER_ADMIN: 1,
+  ADMIN: 1,
+  MANAGER: 1,
+  FINANCE: 2
+};
+
+const countMembersByRole = (members: EventMember[]) =>
+  members.reduce<Record<string, number>>((counts, member) => {
+    if (member.role) {
+      counts[member.role] = (counts[member.role] || 0) + 1;
+    }
+
+    return counts;
+  }, {});
+
+const getAssignableRoles = (
+  roleCounts: Record<string, number>,
+  currentRole: string | null = null
+) =>
+  ROLES.filter((role) => {
+    if (role === "SUPER_ADMIN") {
+      return currentRole === "SUPER_ADMIN";
+    }
+
+    const limit = EVENT_ROLE_LIMITS[role];
+
+    if (!limit) {
+      return true;
+    }
+
+    const currentCount = roleCounts[role] || 0;
+    const nextCount = currentRole === role ? currentCount - 1 : currentCount;
+
+    return nextCount < limit;
+  });
 const SECTION_COPY: Record<
   WorkspaceSection,
   { title: string; description: string }
@@ -336,10 +373,16 @@ export default function EventDetailScreen() {
   );
   const currentMemberRole = currentMember?.role || "";
   const isCreator = event?.createdBy?.id === user?.id;
+  const roleCounts = useMemo(() => countMembersByRole(members), [members]);
+  const memberRoleOptions = useMemo(
+    () =>
+      getAssignableRoles(roleCounts).filter((role) => role !== "SUPER_ADMIN"),
+    [roleCounts]
+  );
   const canManageTasks = TASK_MANAGER_ROLES.includes(currentMemberRole);
   const canManageFinance = FINANCE_ROLES.includes(currentMemberRole);
   const canManageNotifications = FINANCE_ROLES.includes(currentMemberRole);
-  const canManageMembers = EVENT_ADMIN_ROLES.includes(currentMemberRole);
+  const canManageMembers = MEMBER_MANAGER_ROLES.includes(currentMemberRole);
   const canEditEvent = EVENT_ADMIN_ROLES.includes(currentMemberRole);
   const canDeleteEvent = Boolean(isCreator || currentMemberRole === "SUPER_ADMIN");
   const taskListIsAssignedOnly = !TASK_VIEW_ALL_ROLES.includes(currentMemberRole);
@@ -596,6 +639,14 @@ export default function EventDetailScreen() {
       isActive = false;
     };
   }, [tasks]);
+
+  useEffect(() => {
+    if (!memberRoleOptions.length || memberRoleOptions.includes(memberForm.role)) {
+      return;
+    }
+
+    setMemberForm((prev) => ({ ...prev, role: memberRoleOptions[0] }));
+  }, [memberForm.role, memberRoleOptions]);
 
   useEffect(() => {
     const query = memberForm.username.trim();
@@ -1540,13 +1591,7 @@ export default function EventDetailScreen() {
                   </Text>
                 ) : null}
               </View>
-            ) : (
-              <View style={styles.sectionCardBody}>
-                <Text style={styles.mutedText}>
-                  Only SUPER_ADMIN, ADMIN, and FINANCE can send notifications.
-                </Text>
-              </View>
-            )}
+            ) : null}
           </View>
         ) : null}
 
@@ -1795,22 +1840,15 @@ export default function EventDetailScreen() {
                         <Text style={styles.statusPill}>{task.status}</Text>
                       </View>
 
-                      <ChoiceChips
-                        options={TASK_STATUSES}
-                        value={task.status}
-                        onChange={(nextStatus) => {
-                          void handleUpdateTaskStatus(task, nextStatus);
-                        }}
-                        disabled={
-                          updatingTaskId === task.id || !canUpdateThisTask
-                        }
-                      />
-
-                      {!canUpdateThisTask ? (
-                        <Text style={styles.helperText}>
-                          You can update the status after you are assigned to
-                          this task.
-                        </Text>
+                      {canUpdateThisTask ? (
+                        <ChoiceChips
+                          options={TASK_STATUSES}
+                          value={task.status}
+                          onChange={(nextStatus) => {
+                            void handleUpdateTaskStatus(task, nextStatus);
+                          }}
+                          disabled={updatingTaskId === task.id}
+                        />
                       ) : null}
 
                       <View style={styles.assignmentSection}>
@@ -2100,7 +2138,7 @@ export default function EventDetailScreen() {
                   </View>
 
                   <ChoiceChips
-                    options={ROLES}
+                    options={memberRoleOptions}
                     value={memberForm.role}
                     onChange={(nextRole) =>
                       setMemberForm((prev) => ({ ...prev, role: nextRole }))
@@ -2167,8 +2205,9 @@ export default function EventDetailScreen() {
                 <View style={styles.sectionHeaderCopy}>
                   <Text style={styles.sectionTitle}>Current team</Text>
                   <Text style={styles.sectionSubtitle}>
-                    Review membership, update roles, and remove access when
-                    needed.
+                    {canManageMembers
+                      ? "Review membership, update roles, and remove access when needed."
+                      : "View the current team and assigned roles."}
                   </Text>
                 </View>
                 {hasHiddenMembers ? (
@@ -2188,8 +2227,8 @@ export default function EventDetailScreen() {
 
               {!showAllMembers && !visibleMembers.length && members.length ? (
                 <Text style={styles.helperText}>
-                  No SUPER_ADMIN, ADMIN, or FINANCE members to show yet. Use
-                  the toggle to view the full team.
+                  No key roles to show yet. Use the toggle to view the full
+                  team.
                 </Text>
               ) : null}
 
@@ -2197,11 +2236,15 @@ export default function EventDetailScreen() {
                 {visibleMembers.length ? (
                   visibleMembers.map((member) => {
                     const username = member.user?.username || "";
-                    const isCurrentUser = member.user?.id === user?.id;
                     const isUpdatingThisMember =
                       updatingMemberUsername === username;
                     const isRemovingThisMember =
                       removingMemberUsername === username;
+                    const isPrimarySuperAdmin = member.role === "SUPER_ADMIN";
+                    const roleOptions = getAssignableRoles(
+                      roleCounts,
+                      member.role
+                    ).filter((role) => role !== "SUPER_ADMIN");
 
                     return (
                       <View key={member.id} style={styles.memberCard}>
@@ -2214,10 +2257,10 @@ export default function EventDetailScreen() {
                           </Text>
                         </View>
 
-                        {canManageMembers ? (
+                        {canManageMembers && !isPrimarySuperAdmin ? (
                           <View style={styles.memberActions}>
                             <ChoiceChips
-                              options={ROLES}
+                              options={roleOptions}
                               value={member.role}
                               onChange={(nextRole) => {
                                 void handleUpdateMemberRole(member, nextRole);
@@ -2227,27 +2270,23 @@ export default function EventDetailScreen() {
                               }
                             />
 
-                            {!isCurrentUser ? (
-                              <Pressable
-                                onPress={() => confirmRemoveMember(username)}
-                                disabled={isRemovingThisMember}
-                                style={({ pressed }) => [
-                                  styles.dangerGhostButton,
-                                  pressed && styles.buttonPressed,
-                                  isRemovingThisMember && styles.buttonDisabled
-                                ]}
-                              >
-                                {isRemovingThisMember ? (
-                                  <ActivityIndicator color={colors.error} />
-                                ) : (
-                                  <Text style={styles.dangerGhostButtonText}>
-                                    Remove
-                                  </Text>
-                                )}
-                              </Pressable>
-                            ) : (
-                              <Text style={styles.helperText}>You</Text>
-                            )}
+                            <Pressable
+                              onPress={() => confirmRemoveMember(username)}
+                              disabled={isRemovingThisMember}
+                              style={({ pressed }) => [
+                                styles.dangerGhostButton,
+                                pressed && styles.buttonPressed,
+                                isRemovingThisMember && styles.buttonDisabled
+                              ]}
+                            >
+                              {isRemovingThisMember ? (
+                                <ActivityIndicator color={colors.error} />
+                              ) : (
+                                <Text style={styles.dangerGhostButtonText}>
+                                  Remove
+                                </Text>
+                              )}
+                            </Pressable>
                           </View>
                         ) : (
                           <Text style={styles.rolePill}>{member.role}</Text>
